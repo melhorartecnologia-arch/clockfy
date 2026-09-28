@@ -203,6 +203,13 @@ test('policy update, archive and delete', async () => {
   assert.equal(upd.data.name, 'Temp 2');
   assert.equal(upd.data.allowHalfDay, true);
   assert.deepEqual(upd.data.approve.userIds, [manager.user.id]);
+  // without balance the request is refused; grant one day first
+  const noBalance = await api(member)('POST', `/time-off/policies/${pol.data.id}/requests`, { timeOffPeriod: { period: { start: '2026-05-04', end: '2026-05-04' } } });
+  assert.equal(noBalance.status, 400);
+  const grant = await api(owner)('PATCH', `/time-off/balance/policy/${pol.data.id}`, { userIds: [member.user.id], value: 1 });
+  assert.equal(grant.status, 204);
+  const notEligible = await api(owner)('PATCH', `/time-off/balance/policy/${pol.data.id}`, { userIds: [manager.user.id], value: 1 });
+  assert.equal(notEligible.status, 400);
   // specific member approver (manager) can approve even without team manager rights on the policy
   const r = await api(member)('POST', `/time-off/policies/${pol.data.id}/requests`, { timeOffPeriod: { period: { start: '2026-05-04', end: '2026-05-04' } } });
   assert.equal(r.status, 200, r.text);

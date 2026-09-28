@@ -8,7 +8,7 @@ import { audit } from '../../lib/audit.js';
 import { userGroupIds } from '../../middleware/workspace.js';
 import {
   memberCalendar, memberCalendars, holidayDatesForUser, workingDates, workDayInterval, createAutoEntry, notifyWithMail,
-  workspaceAdminIds, teamManagerIdsOf, toDateOnly, dateToIso,
+  workspaceAdminIds, teamManagerIdsOf, toDateOnly,
 } from '../holidays/service.js';
 
 export const REQUEST_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'WITHDRAWN'];
@@ -482,5 +482,3 @@ export async function runAccrual({ now = new Date() } = {}) {
   }
   return credited;
 }
-
-export { dateToIso };

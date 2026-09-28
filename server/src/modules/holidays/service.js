@@ -9,7 +9,6 @@ import { isoToSeconds } from '../../lib/duration.js';
 import { WEEKDAY_NAMES, dayOfWeekLocal, eachDay, addDaysLocal, daysBetween, parseDateOnly, zonedTime, localDateString } from '../../lib/dates.js';
 import { notify } from '../../lib/notify.js';
 import { sendMail } from '../../lib/mailer.js';
-import { newId } from '../../lib/ids.js';
 import { createEntry } from '../timeEntries/service.js';
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -320,5 +319,3 @@ export async function removeHolidayEntries(holidayId) {
     [holidayId],
   );
 }
-
-export { newId };
