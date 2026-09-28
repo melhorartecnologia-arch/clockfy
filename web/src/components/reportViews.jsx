@@ -1,9 +1,46 @@
 import React, { useMemo, useState } from 'react';
 import { Avatar, Empty } from './ui.jsx';
-import { fmtDuration, money, fmtDate, toLocalDateStr, toLocalTimeStr, weekdayShort, monthName } from '../lib/format.js';
+import { fmtDuration, money, fmtDate, toLocalDateStr, toLocalTimeStr, weekdayShort, monthName, addDays, startOfWeekStr, pad } from '../lib/format.js';
 import '../pages/Reports.css';
 
 // Shared rendering of report results (used by the Reports page and by the public shared report page)
+
+// ---------------------------------------------------------------- periods
+export const PERIODS = [
+  { value: 'TODAY', label: 'Hoje', unit: 'day' }, { value: 'YESTERDAY', label: 'Ontem', unit: 'day' },
+  { value: 'THIS_WEEK', label: 'Esta semana', unit: 'week' }, { value: 'LAST_WEEK', label: 'Semana passada', unit: 'week' },
+  { value: 'PAST_TWO_WEEKS', label: 'Últimas 2 semanas', unit: 'range' },
+  { value: 'THIS_MONTH', label: 'Este mês', unit: 'month' }, { value: 'LAST_MONTH', label: 'Mês passado', unit: 'month' },
+  { value: 'THIS_YEAR', label: 'Este ano', unit: 'year' }, { value: 'LAST_YEAR', label: 'Ano passado', unit: 'year' },
+  { value: 'CUSTOM', label: 'Personalizado', unit: 'range' },
+];
+export const monthEnd = (y, m) => new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+const utcOf = (s) => { const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, m - 1, d); };
+export const dayDiff = (a, b) => Math.round((utcOf(b) - utcOf(a)) / 86400000);
+
+// [start, end] (YYYY-MM-DD) for a preset, or null for CUSTOM
+export function presetRange(p, today, weekStart) {
+  const y = Number(today.slice(0, 4)); const m = Number(today.slice(5, 7));
+  switch (p) {
+    case 'TODAY': return [today, today];
+    case 'YESTERDAY': { const d = addDays(today, -1); return [d, d]; }
+    case 'THIS_WEEK': { const s = startOfWeekStr(today, weekStart); return [s, addDays(s, 6)]; }
+    case 'LAST_WEEK': { const s = addDays(startOfWeekStr(today, weekStart), -7); return [s, addDays(s, 6)]; }
+    case 'PAST_TWO_WEEKS': { const s = addDays(startOfWeekStr(today, weekStart), -7); return [s, addDays(s, 13)]; }
+    case 'THIS_MONTH': return [`${today.slice(0, 7)}-01`, monthEnd(y, m)];
+    case 'LAST_MONTH': { const [py, pm] = m === 1 ? [y - 1, 12] : [y, m - 1]; return [`${py}-${pad(pm)}-01`, monthEnd(py, pm)]; }
+    case 'THIS_YEAR': return [`${y}-01-01`, `${y}-12-31`];
+    case 'LAST_YEAR': return [`${y - 1}-01-01`, `${y - 1}-12-31`];
+    default: return null;
+  }
+}
+// Moves a range one unit (day/week/month/year or its own length) backwards (-1) or forwards (1)
+export function shiftRange(start, end, unit, dir) {
+  if (unit === 'month') { const [y, m] = start.split('-').map(Number); const nm = m + dir; const yy = y + Math.floor((nm - 1) / 12); const mm = ((((nm - 1) % 12) + 12) % 12) + 1; return [`${yy}-${pad(mm)}-01`, monthEnd(yy, mm)]; }
+  if (unit === 'year') { const y = Number(start.slice(0, 4)) + dir; return [`${y}-01-01`, `${y}-12-31`]; }
+  const len = dayDiff(start, end) + 1;
+  return [addDays(start, dir * len), addDays(end, dir * len)];
+}
 
 export const REPORT_TYPES = { SUMMARY: 'Resumo', DETAILED: 'Detalhado', WEEKLY: 'Semanal', ATTENDANCE: 'Presença', EXPENSE_DETAILED: 'Despesas' };
 export const REPORT_PATHS = { SUMMARY: 'summary', DETAILED: 'detailed', WEEKLY: 'weekly', ATTENDANCE: 'attendance', EXPENSE_DETAILED: 'expenses/detailed' };
