@@ -1,0 +1,207 @@
+
+##### approval.yml
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/approval-requests  q[status,sort-column,sort-order,page,page-size] body=- -> 200:[ApprovalDetailsDtoV1]  // Get approval requests
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/approval-requests  q[] body=CreateApprovalRequest -> 201:ApprovalRequestDtoV1  // Submit approval request
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/approval-requests/resubmit-entries-for-approval  q[] body=CreateApprovalRequest -> 200:ApprovalRequestDtoV1  // Submit non pending/approved entries/expenses for approval to an existing…
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/approval-requests/users/{userId}  q[] body=CreateApprovalRequest -> 201:ApprovalRequestDtoV1  // Submit an approval request for a user
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/approval-requests/users/{userId}/resubmit-entries-for-approval  q[] body=CreateApprovalRequest -> 200:ApprovalRequestDtoV1  // Re-submit rejected/withdrawn entries/expenses for an approval of a user
+PATCH https://api.clockify.me/api/v1/workspaces/{workspaceId}/approval-requests/{approvalRequestId}  q[] body=UpdateApprovalRequest -> 200:ApprovalRequestDtoV1  // Update an approval request
+
+##### audit-log-report.yml
+POST https://auditlog-api.api.clockify.me/v1/workspaces/{workspaceId}/audit-log  q[] body=AuditLogGetRequestV1 -> 200:PageableV1ListAuditLogDtoV1  // Generate an audit log report
+
+##### balance.yml
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-off/balance/policy/{policyId}  q[page,page-size,sort,sort-order] body=- -> 200:BalancesWithCountDtoV1  // Get balances for a policy
+PATCH https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-off/balance/policy/{policyId}  q[] body=UpdateBalanceRequestV1 -> 204:-  // Update a balance
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-off/balance/user/{userId}  q[page,page-size,sort,sort-order] body=- -> 200:BalancesWithCountDtoV1  // Get balance for a user
+
+##### client.yml
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/clients  q[name,sort-column,sort-order,page,page-size,archived] body=- -> 200:[ClientWithCurrencyDtoV1]  // Find clients on a workspace
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/clients  q[] body=CreateClientRequestV1 -> 201:ClientWithCurrencyDtoV1  // Add a new client
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/clients/{id}  q[] body=- -> 200:ClientWithCurrencyDtoV1  // Get a client by ID
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/clients/{id}  q[archive-projects,mark-tasks-as-done] body=UpdateClientRequestV1 -> 200:ClientDtoV1  // Update a client
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/clients/{id}  q[] body=- -> 200:ClientDtoV1  // Delete a client
+
+##### custom-fields.yml
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/custom-fields  q[name,status,entity-type] body=- -> 200:[CustomFieldDtoV1]  // Get custom fields on a workspace
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/custom-fields  q[] body=CustomFieldRequestV1 -> 201:CustomFieldDtoV1  // Create custom fields on a workspace
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/custom-fields/{customFieldId}  q[] body=UpdateCustomFieldRequestV1 -> 200:CustomFieldDtoV1  // Update custom field on workspace
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/custom-fields/{customFieldId}  q[] body=- -> 204:-  // Delete a custom field
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}/custom-fields  q[status,entity-type] body=- -> 200:[CustomFieldDtoV1]  // Get custom fields on a project
+PATCH https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}/custom-fields/{customFieldId}  q[] body=CustomFieldProjectDefaultValuesRequest -> 200:CustomFieldDtoV1  // Update custom field on a project
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}/custom-fields/{customFieldId}  q[] body=- -> 200:CustomFieldDtoV1  // Remove custom field from a project
+
+##### entity-changes-experimental.yml
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/entities/created  q[type*,start,end,page,limit] body=- -> 200:string  // Created entities (Experimental)
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/entities/deleted  q[type*,start,end,page,limit] body=- -> 200:PageableCollectionLogBinDocumentDto  // Deleted entities (Experimental)
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/entities/updated  q[type*,start,end,page,limit] body=- -> 200:string  // Updated entities (Experimental)
+
+##### expense-report.yml
+POST https://reports.api.clockify.me/v1/workspaces/{workspaceId}/reports/expenses/detailed  q[] body=ExpenseReportFilterV1 -> 200:ExpenseDetailedReportDtoV1  // Generate an expense report
+
+##### expense.yml
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/expenses  q[page,page-size,user-id] body=- -> 200:ExpensesAndTotalsDtoV1  // Get all expenses on a workspace
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/expenses  q[] body=CreateExpenseV1Request -> 201:ExpenseDtoV1  // Create an expense
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/expenses/categories  q[sort-column,sort-order,page,page-size,archived,name] body=- -> 200:ExpenseCategoriesWithCountDtoV1  // Get all expense categories
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/expenses/categories  q[] body=ExpenseCategoryV1Request -> 201:ExpenseCategoryDtoV1  // Add an expense category
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/expenses/categories/{categoryId}  q[] body=ExpenseCategoryV1Request -> 200:ExpenseCategoryDtoV1  // Update an expense category
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/expenses/categories/{categoryId}  q[] body=- -> 204:-  // Delete an expense category
+PATCH https://api.clockify.me/api/v1/workspaces/{workspaceId}/expenses/categories/{categoryId}/status  q[] body=ExpenseCategoryArchiveV1Request -> 200:ExpenseCategoryDtoV1  // Archive an expense category
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/expenses/{expenseId}  q[] body=- -> 200:ExpenseDtoV1  // Get an expense by ID
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/expenses/{expenseId}  q[] body=UpdateExpenseV1Request -> 200:ExpenseDtoV1  // Update an expense
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/expenses/{expenseId}  q[] body=- -> 200:-  // Delete an expense
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/expenses/{expenseId}/files/{fileId}  q[] body=- -> 200:string  // Download a receipt
+
+##### group.yml
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/user-groups  q[project-id,name,sort-column,sort-order,page,page-size,includeTeamManagers] body=- -> 200:[UserGroupDtoV1]  // Find all groups on a workspace
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/user-groups  q[] body=UserGroupRequest -> 201:UserGroupDtoV1  // Add a new group
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/user-groups/{id}  q[] body=UpdateUserGroupRequest -> 200:UserGroupDtoV1  // Update a group
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/user-groups/{id}  q[] body=- -> 200:UserGroupDtoV1  // Delete a group
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/user-groups/{userGroupId}/users  q[] body=UserGroupUserRequest -> 200:UserGroupDtoV1  // Add users to a group
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/user-groups/{userGroupId}/users/{userId}  q[] body=- -> 200:UserGroupDtoV1  // Remove a user from a group
+
+##### holiday.yml
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/holidays  q[assigned-to] body=- -> 200:[HolidayDtoV1]  // Get holidays on a workspace
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/holidays  q[] body=CreateHolidayRequestV1 -> 200:HolidayDtoV1  // Create a holiday
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/holidays/in-period  q[assigned-to*,start*,end*] body=- -> 200:[HolidayDtoV1]  // Get holidays in a specific period
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/holidays/{holidayId}  q[] body=UpdateHolidayRequestV1 -> 200:HolidayDtoV1  // Update a holiday
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/holidays/{holidayId}  q[] body=- -> 200:HolidayDto  // Delete a holiday
+
+##### invoice.yml
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices  q[page,page-size,statuses,sort-column,sort-order] body=- -> 200:InvoicesListDtoV1  // Get all invoices on a workspace
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices  q[] body=CreateInvoiceRequest -> 201:CreateInvoiceDtoV1  // Add an invoice
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices/info  q[] body=InvoiceFilterRequestV1 -> 200:InvoiceInfoResponseDtoV1  // Filter out invoices
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices/settings  q[] body=- -> 200:InvoiceSettingsDtoV1  // Get an invoice in another language
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices/settings  q[] body=UpdateInvoiceSettingsRequestV1 -> 200:-  // Change an invoice language
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices/{invoiceId}  q[] body=- -> 200:InvoiceOverviewDtoV1  // Get an invoice by ID
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices/{invoiceId}  q[] body=UpdateInvoiceRequestV1 -> 200:InvoiceOverviewDtoV1  // Update an invoice
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices/{invoiceId}  q[] body=- -> 200:-  // Delete an invoice
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices/{invoiceId}/duplicate  q[] body=- -> 201:InvoiceOverviewDtoV1  // Duplicate an invoice
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices/{invoiceId}/export  q[userLocale*] body=- -> 200:string  // Export an invoice
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices/{invoiceId}/items  q[] body=CreateInvoiceItemRequestV1 -> 200:InvoiceOverviewDtoV1  // Add item to an invoice
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices/{invoiceId}/items/import  q[] body=ImportTimeEntriesAndExpensesRequestV1 -> 200:InvoiceOverviewDtoV1  // Import time entries and expenses to an invoice
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices/{invoiceId}/items/{order}  q[] body=- -> 200:InvoiceOverviewDtoV1  // Delete item from an invoice
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices/{invoiceId}/payments  q[page,page-size] body=- -> 200:[InvoicePaymentDtoV1]  // Get payments for an invoice
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices/{invoiceId}/payments  q[] body=CreateInvoicePaymentRequest -> 201:InvoiceOverviewDtoV1  // Add payment to an invoice
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices/{invoiceId}/payments/{paymentId}  q[] body=- -> 200:InvoiceOverviewDtoV1  // Delete payment from an invoice
+PATCH https://api.clockify.me/api/v1/workspaces/{workspaceId}/invoices/{invoiceId}/status  q[] body=ChangeInvoiceStatusRequestV1 -> 200:-  // Change an invoice status
+
+##### policy.yml
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-off/policies  q[page,page-size,name,status,sort-column,sort-order] body=- -> 200:[PolicyDtoV1]  // Get policies on a workspace
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-off/policies  q[] body=CreatePolicyRequestV1 -> 201:PolicyDtoV1  // Create a time off policy
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-off/policies/{id}  q[] body=- -> 200:PolicyDtoV1  // Get a time off policy
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-off/policies/{id}  q[] body=UpdatePolicyRequestV1 -> 200:PolicyDtoV1  // Update a policy
+PATCH https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-off/policies/{id}  q[] body=ChangePolicyStatusRequestV1 -> 200:PolicyDtoV1  // Change a policy status
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-off/policies/{id}  q[] body=- -> 200:-  // Delete a policy
+
+##### project.yml
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects  q[name,strict-name-search,archived,billable,clients,contains-client,client-status,users,contains-user,user-status,is-template,sort-column,sort-order,hydrated,page,page-size,access,expense-limit,expense-date,userGroups,contains-group] body=- -> 200:[ProjectDtoV1]  // Get all projects on a workspace
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects  q[] body=ProjectRequest -> 201:ProjectDtoImplV1  // Add a new project
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/from-template  q[] body=CreateProjectFromTemplateV1 -> 200:ProjectDtoImplV1  // Create project from a template
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}  q[hydrated,custom-field-entity-type,expense-limit,expense-date] body=- -> 200:ProjectDtoV1  // Find a project by ID
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}  q[] body=UpdateProjectRequest -> 200:ProjectDtoImplV1  // Update a project on a workspace
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}  q[] body=- -> 200:ProjectDtoImplV1  // Delete a project from a workspace
+PATCH https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}/estimate  q[] body=ProjectEstimateRequest -> 200:ProjectDtoImplV1  // Update project estimate
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}/memberships  q[] body=AddUsersToProjectRequestV1 -> 200:ProjectDtoImplV1  // Assign/remove users to/from the project
+PATCH https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}/memberships  q[] body=UpdateProjectMembershipsRequest -> 200:ProjectDtoImplV1  // Update project memberships
+PATCH https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}/template  q[] body=PatchProjectTemplateRequest -> 200:ProjectDtoImplV1  // Update a project template
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate  q[] body=CostRateRequestV1 -> 200:ProjectDtoImplV1  // Update project user's cost rate
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/hourly-rate  q[] body=CostRateRequestV1 -> 200:ProjectDtoImplV1  // Update a project user's billable rate
+
+##### scheduling.yml
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/scheduling/assignments/all  q[name,start*,end*,sort-column,sort-order,page,page-size] body=- -> 200:[AssignmentHydratedDtoV1]  // Get all assignments
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/scheduling/assignments/projects/totals  q[] body=ProjectTotalsRequestV1 -> 200:[SchedulingProjectsTotalsDtoV1]  // Get all scheduled assignments per project
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/scheduling/assignments/projects/totals/{projectId}  q[start*,end*] body=- -> 200:SchedulingProjectsTotalsDtoV1  // Get all scheduled assignments on project
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/scheduling/assignments/publish  q[] body=PublishAssignmentsRequestV1 -> 200:-  // Publish assignments
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/scheduling/assignments/recurring  q[] body=AssignmentCreateRequestV1 -> 201:[AssignmentDtoV1]  // Create a recurring assignment
+PATCH https://api.clockify.me/api/v1/workspaces/{workspaceId}/scheduling/assignments/recurring/{assignmentId}  q[] body=AssignmentUpdateRequestV1 -> 200:[AssignmentDtoV1]  // Update a recurring assignment
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/scheduling/assignments/recurring/{assignmentId}  q[seriesUpdateOption] body=- -> 200:[AssignmentDtoV1]  // Delete a recurring assignment
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/scheduling/assignments/series/{assignmentId}  q[] body=RecurringAssignmentRequestV1 -> 200:[AssignmentDtoV1]  // Change the recurring period
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/scheduling/assignments/user-filter/totals  q[] body=GetUserTotalsRequestV1 -> 200:[SchedulingUsersTotalsDtoV1]  // Get total of users' capacity on workspace
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/scheduling/assignments/users/{userId}/totals  q[page,page-size,start*,end*] body=- -> 200:SchedulingUsersTotalsDtoV1  // Get total capacity of a user
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/scheduling/assignments/{assignmentId}/copy  q[] body=CopyAssignmentRequestV1 -> 200:[AssignmentDtoV1]  // Copy a scheduled assignment
+
+##### shared-report.yml
+GET https://reports.api.clockify.me/v1/shared-reports/{id}  q[dateRangeStart,dateRangeEnd,sortOrder,sortColumn,exportType,page,pageSize] body=- -> 200:TimeEntrySummaryReportDto  // Generate shared report by ID
+GET https://reports.api.clockify.me/v1/workspaces/{workspaceId}/shared-reports  q[page,pageSize,sharedReportsFilter] body=- -> 200:SharedReportsAndCountDtoV1  // Get all my shared reports
+POST https://reports.api.clockify.me/v1/workspaces/{workspaceId}/shared-reports  q[] body=SharedReportRequestV1 -> 200:SharedReportV1  // Create a shared report
+PUT https://reports.api.clockify.me/v1/workspaces/{workspaceId}/shared-reports/{id}  q[] body=UpdateSharedReportRequestV1 -> 200:SharedReportV1  // Update a shared report
+DELETE https://reports.api.clockify.me/v1/workspaces/{workspaceId}/shared-reports/{id}  q[] body=- -> 204:-  // Delete a shared report
+
+##### tag.yml
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/tags  q[name,strict-name-search,excluded-ids,sort-column,sort-order,page,page-size,archived] body=- -> 200:[TagDtoV1]  // Find tags on a workspace
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/tags  q[] body=TagRequest -> 201:TagDtoV1  // Add a new tag
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/tags/{id}  q[] body=- -> 200:TagDtoV1  // Get a tag by ID
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/tags/{id}  q[] body=UpdateTagRequest -> 200:TagDtoV1  // Update a tag
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/tags/{id}  q[] body=- -> 200:TagDtoV1  // Delete a tag
+
+##### task.yml
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}/tasks  q[name,strict-name-search,is-active,page,page-size,sort-column,sort-order] body=- -> 200:[TaskDtoV1]  // Find tasks on a project
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}/tasks  q[contains-assignee] body=TaskRequestV1 -> 201:TaskDtoV1  // Add a new task on a project
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}/cost-rate  q[] body=CostRateRequestV1 -> 200:TaskDtoV1  // Update a task's cost rate
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}/hourly-rate  q[] body=HourlyRateRequestV1 -> 200:TaskDtoV1  // Update a task's billable rate
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}  q[] body=- -> 200:TaskDtoV1  // Get a task by id
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}  q[contains-assignee,membership-status] body=UpdateTaskRequest -> 200:TaskDtoV1  // Update a task on a project
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}  q[] body=- -> 200:TaskDtoV1  // Delete a task from a project
+
+##### team-report.yml
+POST https://reports.api.clockify.me/v1/workspaces/{workspaceId}/reports/attendance  q[] body=AttendanceReportFilterV1 -> 200:AttendanceReportDtoV1  // Generate an attendance report
+
+##### time-entry-report.yml
+POST https://reports.api.clockify.me/v1/workspaces/{workspaceId}/reports/detailed  q[] body=DetailedReportFilterV1 -> 200:TimeEntryDetailedReportDto  // Generate a detailed report
+POST https://reports.api.clockify.me/v1/workspaces/{workspaceId}/reports/summary  q[] body=SummaryReportFilterV1 -> 200:TimeEntrySummaryReportDto  // Generate a summary report
+POST https://reports.api.clockify.me/v1/workspaces/{workspaceId}/reports/weekly  q[] body=WeeklyReportFilterV1 -> 200:TimeEntryWeeklyReportDto  // Generate a weekly report
+
+##### time-entry.yml
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-entries  q[] body=CreateTimeEntryRequest -> 201:TimeEntryDtoImplV1  // Add a new time entry
+PATCH https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-entries/invoiced  q[] body=UpdateInvoicedStatusRequest -> 200:-  // Mark time entries as invoiced
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-entries/status/in-progress  q[page,page-size] body=- -> 200:[TimeEntryWithRatesDtoV1]  // Get all in progress time entries on a workspace
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-entries/{id}  q[hydrated] body=- -> 200:TimeEntryWithRatesDtoV1  // Get a specific time entry on a workspace
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-entries/{id}  q[] body=UpdateTimeEntryRequest -> 200:TimeEntryDtoImplV1  // Update time entry on a workspace
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-entries/{id}  q[] body=- -> 204:-  // Delete a time entry from a workspace
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/user/{userId}/time-entries  q[description,start,end,project,task,tags,project-required,task-required,hydrated,page,page-size,in-progress,get-week-before] body=- -> 200:[TimeEntryWithRatesDtoV1]  // Get time entries for a user on a workspace
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/user/{userId}/time-entries  q[from-entry] body=CreateTimeEntryRequest -> 201:TimeEntryDtoImplV1  // Add a new time entry for another user on workspace
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/user/{userId}/time-entries  q[hydrated] body={"minItems":1,"type":"array","items":{"$ref":"#/components/schemas/UpdateTimeEnt -> 200:[TimeEntryDtoV1]  // Bulk edit time entries
+PATCH https://api.clockify.me/api/v1/workspaces/{workspaceId}/user/{userId}/time-entries  q[] body=StopTimeEntryRequest -> 200:TimeEntryDtoImplV1  // Stop a currently running timer on a workspace for a user
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/user/{userId}/time-entries  q[time-entry-ids*] body=- -> 200:[TimeEntryDtoImplV1]  // Delete all time entries for a user on a workspace
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/user/{userId}/time-entries/{id}/duplicate  q[] body=- -> 201:TimeEntryDtoImplV1  // Duplicate a time entry
+
+##### time-off.yml
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-off/policies/{policyId}/requests  q[] body=CreateTimeOffRequestV1Request -> 200:TimeOffRequestFullV1Dto  // Create a time off request
+PATCH https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-off/policies/{policyId}/requests/{requestId}  q[] body=StatusTimeOffRequestV1Request -> 200:TimeOffRequestV1Dto  // Change a time off request status
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-off/policies/{policyId}/requests/{requestId}  q[] body=- -> 200:TimeOffRequestV1Dto  // Delete a time off request
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-off/policies/{policyId}/users/{userId}/requests  q[] body=CreateTimeOffRequestV1Request -> 200:TimeOffRequestFullV1Dto  // Create a time off request for a user
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/time-off/requests  q[] body=GetTimeOffRequestsV1Request -> 200:TimeOffRequestsWithCountV1Dto  // Get all time off requests on a workspace
+
+##### user.yml
+POST https://api.clockify.me/api/v1/file/image  q[] body={"type":"object","properties":{"file":{"type":"string","description":"Image to b -> 200:UploadFileResponseV1  // Add a photo
+GET https://api.clockify.me/api/v1/user  q[include-memberships] body=- -> 200:UserDtoV1  // Get currently logged-in user's info
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/member-profile/{userId}  q[] body=- -> 200:MemberProfileDtoV1  // Get a member's profile
+PATCH https://api.clockify.me/api/v1/workspaces/{workspaceId}/member-profile/{userId}  q[] body=MemberProfileFullRequestV1 -> 200:MemberProfileDtoV1  // Update a member's profile
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/users  q[email,project-id,status,account-statuses,name,sort-column,sort-order,page,page-size,memberships,include-roles*] body=- -> 200:[UserDtoV1]  // Find all users on a workspace
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/users/info  q[] body=GetUsersRequestV1 -> 200:[UserDtoV1]  // Filter workspace users
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/users/{userId}/custom-field/{customFieldId}/value  q[] body=UpsertUserCustomFieldRequestV1 -> 201:UserCustomFieldValueDtoV1  // Update a user's custom field
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/users/{userId}/managers  q[sort-column,sort-order,page,page-size] body=- -> 200:[UserDtoV1]  // Find user's team manager
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/users/{userId}/roles  q[] body=RoleRequestV1 -> 201:[RoleDetailsDtoV1]  // Give manager role to a user
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/users/{userId}/roles  q[] body=RoleRequestV1 -> 204:-  // Remove user's manager role
+
+##### webhooks.yml
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/addons/{addonId}/webhooks  q[] body=- -> 200:WebhooksDtoV1  // Get all webhooks for addon on a workspace
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/webhooks  q[type] body=- -> 200:WebhooksDtoV1  // Get all webhooks on a workspace
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/webhooks  q[] body=CreateWebhookRequestV1 -> 201:WebhookDtoV1  // Create a webhook
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}/webhooks/{webhookId}  q[] body=- -> 200:WebhookDtoV1  // Get a specific webhook by id
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/webhooks/{webhookId}  q[] body=UpdateWebhookRequestV1 -> 200:WebhookDtoV1  // Update a webhook
+DELETE https://api.clockify.me/api/v1/workspaces/{workspaceId}/webhooks/{webhookId}  q[] body=- -> 200:-  // Delete a webhook
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/webhooks/{webhookId}/logs  q[page,size] body=WebhookLogSearchRequestV1 -> 200:[WebhookLogDtoV1]  // Get logs for a webhook
+PATCH https://api.clockify.me/api/v1/workspaces/{workspaceId}/webhooks/{webhookId}/token  q[] body=- -> 200:WebhookDtoV1  // Generate a new token
+
+##### workspace.yml
+GET https://api.clockify.me/api/v1/workspaces  q[roles] body=- -> 200:[WorkspaceDtoV1]  // Get all my workspaces
+POST https://api.clockify.me/api/v1/workspaces  q[] body=CreateWorkspaceRequestV1 -> 201:WorkspaceDtoV1  // Add a workspace
+GET https://api.clockify.me/api/v1/workspaces/{workspaceId}  q[] body=- -> 200:WorkspaceDtoV1  // Get workspace info
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/cost-rate  q[] body=CostRateRequestV1 -> 200:WorkspaceDtoV1  // Update workspace cost rate
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/hourly-rate  q[] body=RateWithCurrencyRequestV1 -> 200:WorkspaceDtoV1  // Update workspace billable rate
+POST https://api.clockify.me/api/v1/workspaces/{workspaceId}/users  q[send-email*] body=AddUserToWorkspaceRequest -> 200:WorkspaceDtoV1  // Add user to a workspace
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/users/{userId}  q[] body=UpdateUserStatusRequest -> 200:WorkspaceDtoV1  // Update a user's status
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/users/{userId}/cost-rate  q[] body=CostRateRequestV1 -> 200:WorkspaceDtoV1  // Update a user's cost rate
+PUT https://api.clockify.me/api/v1/workspaces/{workspaceId}/users/{userId}/hourly-rate  q[] body=HourlyRateRequestV1 -> 200:WorkspaceDtoV1  // Update a user's hourly rate

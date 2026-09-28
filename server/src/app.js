@@ -15,6 +15,16 @@ export function createApp() {
   app.use(express.urlencoded({ extended: true }));
 
   app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
+
+  // API documentation (OpenAPI 3 + Redoc)
+  const docsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
+  app.get(['/api/docs/openapi.json', '/api/openapi.json'], (req, res) => res.sendFile(path.join(docsDir, 'openapi.json')));
+  app.get('/api/docs', (req, res) => {
+    res.type('html').send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Clockfy API</title><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{margin:0}</style></head>
+<body><redoc spec-url="/api/docs/openapi.json"></redoc><script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+<noscript><a href="/api/docs/openapi.json">openapi.json</a></noscript></body></html>`);
+  });
+
   registerRoutes(app);
 
   // Serve the built SPA (web/dist) if present
