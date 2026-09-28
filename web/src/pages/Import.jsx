@@ -7,8 +7,9 @@ import { useAsync, useInterval } from '../lib/hooks.js';
 import { errorMessage } from '../lib/format.js';
 
 const ENTITIES = [
-  ['clients', 'Clientes'], ['tags', 'Etiquetas'], ['projects', 'Projetos'], ['tasks', 'Tarefas'], ['users', 'Membros e grupos'],
-  ['customFields', 'Campos personalizados'], ['timeEntries', 'Registros de tempo'], ['timeOff', 'Folgas'], ['expenses', 'Despesas'], ['invoices', 'Faturas'],
+  ['workspace', 'Configurações do workspace'], ['users', 'Membros'], ['userGroups', 'Grupos'], ['clients', 'Clientes'], ['projects', 'Projetos'], ['tasks', 'Tarefas'],
+  ['tags', 'Etiquetas'], ['customFields', 'Campos personalizados'], ['timeEntries', 'Registros de tempo'], ['expenses', 'Despesas'], ['holidays', 'Feriados'],
+  ['timeOff', 'Folgas'], ['approvals', 'Aprovações'], ['scheduling', 'Agenda'], ['invoices', 'Faturas'], ['webhooks', 'Webhooks'],
 ];
 const STATUS = { PENDING: ['Na fila', ''], RUNNING: ['Executando', 'primary'], DONE: ['Concluído', 'success'], FAILED: ['Falhou', 'danger'], CANCELLED: ['Cancelado', 'warning'] };
 
@@ -223,15 +224,23 @@ function JobMonitor({ jobId, onFinished, onNew }) {
     <div>
       <div className="row gap wrap mb">
         <span className={`badge ${cls}`}>{label}</span>
-        <span className="muted small">Job {job.id} · origem: {job.source || 'clockify'}{job.dryRun ? ' · simulação' : ''}</span>
+        <span className="muted small">Job {job.id} · origem: {job.source || 'clockify'}{job.options?.dryRun ? ' · simulação' : ''}{job.options?.since ? ` · desde ${String(job.options.since).slice(0, 10)}` : ''}</span>
         <span className="muted small">{job.startedAt && `Início ${new Date(job.startedAt).toLocaleString('pt-BR')}`}{job.finishedAt && ` · Fim ${new Date(job.finishedAt).toLocaleString('pt-BR')}`}</span>
         {active && <button className="btn secondary sm right" onClick={() => setConfirm({ title: 'Cancelar importação', message: 'Cancelar a importação em andamento? Os dados já gravados serão mantidos.', confirmLabel: 'Cancelar importação', danger: true, onConfirm: cancel })}>Cancelar</button>}
         {!active && <button className="btn secondary sm right" onClick={onNew}>Nova importação</button>}
       </div>
       <div className="row gap"><span className="bold" style={{ minWidth: 160 }}>{p.stage ? stageLabel(p.stage) : (active ? 'Aguardando…' : '')}</span><div className="progress grow" style={{ height: 12 }}><div className={job.status === 'FAILED' ? 'over' : ''} style={{ width: `${pct ?? (active ? 15 : 0)}%`, transition: 'width .4s' }} /></div><span className="mono small" style={{ minWidth: 90, textAlign: 'right' }}>{p.total ? `${p.current} / ${p.total}` : pct != null ? `${pct}%` : ''}</span></div>
       {job.error && <Alert type="error">{job.error}</Alert>}
-      {p.counts && Object.keys(p.counts).length > 0 && (
-        <div className="row gap wrap mt">{Object.entries(p.counts).map(([k, v]) => <span key={k} className="chip">{stageLabel(k)}: <b>{typeof v === 'object' ? Object.entries(v).map(([a, b]) => `${a} ${b}`).join(', ') : v}</b></span>)}</div>
+      {p.stages && Object.keys(p.stages).length > 0 && (
+        <table className="table compact mt">
+          <thead><tr><th>Etapa</th><th>Status</th><th className="num">Lidos</th><th className="num">Criados</th><th className="num">Atualizados</th><th className="num">Ignorados</th><th className="num">Erros</th></tr></thead>
+          <tbody>{Object.entries(p.stages).map(([k, st]) => { const d = p.details?.[k] || {}; const sl = { DONE: ['Concluída', 'success'], FAILED: ['Falhou', 'danger'], SKIPPED: ['Ignorada', ''], RUNNING: ['Executando', 'primary'] }[st.status] || [st.status, '']; return (
+            <tr key={k}><td>{stageLabel(k)}</td><td><span className={`badge ${sl[1]}`}>{sl[0]}</span>{st.error && <span className="small muted ml" title={st.error}>{String(st.error).slice(0, 80)}</span>}</td><td className="num mono">{d.fetched ?? '—'}</td><td className="num mono">{d.created ?? '—'}</td><td className="num mono">{d.updated ?? '—'}</td><td className="num mono">{d.skipped ?? '—'}</td><td className="num mono" style={d.errors ? { color: 'var(--danger)' } : undefined}>{d.errors ?? '—'}</td></tr>
+          ); })}</tbody>
+        </table>
+      )}
+      {!p.stages && p.counts && Object.keys(p.counts).length > 0 && (
+        <div className="row gap wrap mt">{Object.entries(p.counts).map(([k, v]) => <span key={k} className="chip">{stageLabel(k)}: <b>{typeof v === 'object' ? JSON.stringify(v) : v}</b></span>)}</div>
       )}
       <div className="import-log mt">
         {(job.log || []).length === 0 ? <div className="light">Sem mensagens ainda…</div> : (job.log || []).map((l, i) => <div key={i} className={typeof l === 'object' && l.level === 'error' ? 'err' : ''}>{typeof l === 'string' ? l : `${l.at || l.time ? `[${new Date(l.at || l.time).toLocaleTimeString('pt-BR')}] ` : ''}${l.message || JSON.stringify(l)}`}</div>)}
@@ -242,7 +251,7 @@ function JobMonitor({ jobId, onFinished, onNew }) {
 }
 
 function stageLabel(k) {
-  const m = Object.fromEntries(ENTITIES); const map = { ...m, userGroups: 'Grupos', memberships: 'Membros', rates: 'Taxas', workspace: 'Workspace', done: 'Concluído', init: 'Preparando' };
+  const map = { ...Object.fromEntries(ENTITIES), PENDING: 'Na fila', STARTING: 'Preparando', DONE: 'Concluído', rows: 'Linhas', created: 'Criados', skipped: 'Ignorados', errors: 'Erros' };
   return map[k] || k;
 }
 
@@ -256,7 +265,7 @@ function JobHistory({ jobs, onOpen, onReload }) {
         <tbody>{jobs.map((j) => { const [label, cls] = STATUS[j.status] || [j.status, '']; const c = j.progress?.counts || {}; return (
           <tr key={j.id}>
             <td className="small">{j.startedAt || j.createdAt ? new Date(j.startedAt || j.createdAt).toLocaleString('pt-BR') : '—'}</td>
-            <td>{j.source || 'clockify'}{j.dryRun && <span className="badge ml">Simulação</span>}</td>
+            <td>{j.source || 'clockify'}{j.options?.dryRun && <span className="badge ml">Simulação</span>}{j.options?.mode === 'NEW_WORKSPACE' && <span className="badge ml">Novo workspace</span>}</td>
             <td><span className={`badge ${cls}`}>{label}</span></td>
             <td className="small muted">{j.progress?.stage ? `${stageLabel(j.progress.stage)} ${j.progress.total ? `${j.progress.current}/${j.progress.total}` : ''}` : '—'}</td>
             <td className="small muted truncate" style={{ maxWidth: 320 }}>{Object.entries(c).map(([k, v]) => `${stageLabel(k)}: ${typeof v === 'object' ? Object.values(v).join('/') : v}`).join(' · ') || j.error || '—'}</td>

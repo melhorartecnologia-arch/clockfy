@@ -4,9 +4,9 @@ import { api, endpoints, ws } from '../api.js';
 import { ProjectPicker, useProjects, useUsers } from '../components/pickers.jsx';
 import { Spinner, Alert, Modal, Confirm, ProjectLabel } from '../components/ui.jsx';
 import EntryEditor from '../components/EntryEditor.jsx';
-import { useLocalState } from '../lib/hooks.js';
 import { fmtDuration, entryDuration, toLocalDateStr, toLocalTimeStr, localToIso, parseDuration, addDays, startOfWeekStr, weekdayShort, fmtDate, errorMessage } from '../lib/format.js';
 
+const shortDate = (d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
 const rowKey = (projectId, taskId, description = '') => `${projectId || ''}|${taskId || ''}|${(description || '').trim()}`;
 
 export default function Timesheet() {
@@ -20,7 +20,7 @@ export default function Timesheet() {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [extraRows, setExtraRows] = useLocalState(`clockfy.timesheetRows.${wsId}.${viewUser}`, []);
+  const [extraRows, setExtraRows] = useState([]); // blank rows added manually (reset when the viewed user changes)
   const [adding, setAdding] = useState(false);
   const [multi, setMulti] = useState(null); // { row, day, list }
   const [editing, setEditing] = useState(null);
@@ -28,6 +28,7 @@ export default function Timesheet() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => { setWeekOf((w) => startOfWeekStr(w, weekStart)); }, [weekStart]);
+  useEffect(() => { setExtraRows([]); }, [viewUser]);
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekOf, i)), [weekOf]);
   const weekEnd = days[6];
@@ -135,7 +136,7 @@ export default function Timesheet() {
   async function submitApproval() {
     setBusy(true);
     try {
-      await api.post(`${ws(wsId)}/approval-requests`, { period: 'WEEKLY', periodStart: startIso, ...(isMe ? {} : { userId: viewUser }) });
+      await api.post(`${ws(wsId)}/approval-requests${isMe ? '' : `/users/${viewUser}`}`, { period: 'WEEKLY', periodStart: startIso });
       toast('Semana enviada para aprovação', 'success');
       load();
     } catch (err) {
@@ -174,7 +175,7 @@ export default function Timesheet() {
             <thead>
               <tr>
                 <th style={{ minWidth: 260 }}>Projeto / tarefa</th>
-                {days.map((d) => <th key={d} className={`center ${d === today ? 'today' : ''}`}><div>{weekdayShort(d)}</div><div className="light" style={{ fontWeight: 400 }}>{fmtDate(d, dateFormat).slice(0, 5)}</div></th>)}
+                {days.map((d) => <th key={d} className={`center ${d === today ? 'today' : ''}`}><div>{weekdayShort(d)}</div><div className="light" style={{ fontWeight: 400 }}>{shortDate(d)}</div></th>)}
                 <th className="num">Total</th>
                 <th />
               </tr>

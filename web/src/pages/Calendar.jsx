@@ -118,7 +118,7 @@ export default function Calendar() {
             <div className="calendar-corner small light">{running && viewUser ? '⏱' : ''}</div>
             {days.map((d) => (
               <div key={d} className={`calendar-day ${d === today ? 'today' : ''}`}>
-                <div className="bold">{weekdayShort(d)} <span className="muted" style={{ fontWeight: 400 }}>{fmtDate(d, dateFormat).slice(0, 5)}</span></div>
+                <div className="bold">{weekdayShort(d)} <span className="muted" style={{ fontWeight: 400 }}>{d.slice(8, 10)}/{d.slice(5, 7)}</span></div>
                 <div className="small muted mono">{fmtDuration(dayTotal(d), { seconds: false })}</div>
               </div>
             ))}

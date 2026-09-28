@@ -172,11 +172,11 @@ export default function Dashboard() {
 
           {sel === 'TEAM' && (
             <div className="card mt">
-              <div className="card-head"><h3 style={{ margin: 0 }}>Status da equipe</h3><span className="muted small right">{data.team.filter((t) => t.running).length} com timer em andamento</span></div>
+              <div className="card-head"><h3 style={{ margin: 0 }}>Status da equipe</h3><span className="muted small right">{(data.team || []).filter((t) => t.running).length} com timer em andamento</span></div>
               <table className="table">
                 <thead><tr><th>Membro</th><th>Status</th><th>Atividade atual</th><th className="num">Tempo no período</th><th>Última atividade</th></tr></thead>
                 <tbody>
-                  {data.team.map((t) => (
+                  {(data.team || []).map((t) => (
                     <tr key={t.userId}>
                       <td><span className="row gap"><Avatar user={{ name: t.userName, profilePicture: t.imageUrl }} size={26} /><span>{t.userName}</span></span></td>
                       <td>{t.running ? <span className="badge success">● Rastreando</span> : <span className="badge">Parado</span>}</td>
@@ -185,7 +185,7 @@ export default function Dashboard() {
                       <td className="muted small">{t.lastActivity ? `${fmtDate(toLocalDateStr(t.lastActivity, timeZone), dateFormat)} ${toLocalTimeStr(t.lastActivity, timeZone)}` : '—'}</td>
                     </tr>
                   ))}
-                  {data.team.length === 0 && <tr><td colSpan={5} className="center muted" style={{ padding: 24 }}>Nenhum membro ativo.</td></tr>}
+                  {(data.team || []).length === 0 && <tr><td colSpan={5} className="center muted" style={{ padding: 24 }}>Nenhum membro ativo.</td></tr>}
                 </tbody>
               </table>
             </div>
