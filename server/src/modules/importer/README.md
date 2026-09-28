@@ -29,8 +29,9 @@ Todos os endpoints abaixo exigem um administrador do workspace local e ficam sob
 `/api/v1/workspaces/{workspaceId}/import`.
 
 1. **Descobrir os workspaces da chave**
-   `POST /import/clockify/workspaces` `{ "apiKey": "...", "baseUrl": "opcional" }` → `{ user, workspaces: [{id, name, memberships}] }`
-   (também aceito via `GET ...?apiKey=...`).
+   `POST /import/clockify/workspaces` `{ "apiKey": "...", "baseUrl": "opcional" }` →
+   `[{ id, name, imageUrl, memberships, hourlyRate, currencies, apiUser: { id, email, name } }]`
+   (também aceito via `GET ...?apiKey=...`). Chave inválida → `400`.
 2. **Iniciar a importação**
    `POST /import/clockify`
    ```json
@@ -41,7 +42,10 @@ Todos os endpoints abaixo exigem um administrador do workspace local e ficam sob
      "since": "2010-01-01",                 // opcional – só registros a partir desta data
      "entities": ["users", "projects"],    // opcional – etapas a executar (padrão: todas)
      "dryRun": false,                        // true = apenas conta, não grava
-     "baseUrl": "https://api.clockify.me/api/v1"
+     "baseUrl": "https://api.clockify.me/api/v1",
+     "memberProfiles": true,                 // false = não consulta /member-profile (mais rápido)
+     "pageSize": 1000,                       // página dos registros de tempo (1..5000)
+     "ratePerSecond": 8                      // requisições/s (Clockify permite ~10; só aumente contra um espelho/mock)
    }
    ```
    Resposta `202 { jobId, status }`. A importação roda em segundo plano.

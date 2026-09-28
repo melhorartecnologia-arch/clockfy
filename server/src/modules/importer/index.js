@@ -50,7 +50,9 @@ async function workspacesForKey(req, res) {
   req.ctx.requireAdmin();
   const src = req.method === 'GET' ? { apiKey: req.query.apiKey || req.get('x-clockify-api-key'), baseUrl: req.query.baseUrl } : (req.body || {});
   const body = parse(keySchema, { apiKey: src.apiKey, baseUrl: src.baseUrl || undefined });
-  res.json(await listWorkspacesForKey(body));
+  const { user, workspaces } = await listWorkspacesForKey(body);
+  // Plain array (what the UI's picker expects); the key's owner is attached to each item as `apiUser`.
+  res.json(workspaces.map((w) => ({ ...w, apiUser: user })));
 }
 router.post('/clockify/workspaces', workspacesForKey);
 router.get('/clockify/workspaces', workspacesForKey);

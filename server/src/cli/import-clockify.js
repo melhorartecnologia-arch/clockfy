@@ -5,7 +5,7 @@
 //   npm run import:clockify -- --api-key KEY --source-workspace ID --new-workspace --owner-email admin@empresa.com
 //
 // Options: --since YYYY-MM-DD, --entities users,projects,timeEntries, --base-url https://api.clockify.me/api/v1,
-//          --dry-run, --list-workspaces, --page-size N, --no-member-profiles
+//          --dry-run, --list-workspaces, --page-size N, --rate-per-second N, --no-member-profiles
 import { parseArgs } from 'node:util';
 import { migrate } from '../lib/migrate.js';
 import { one, rows, close } from '../lib/db.js';
@@ -23,6 +23,7 @@ const HELP = `Uso: node src/cli/import-clockify.js [opções]
   --entities a,b,c          etapas a executar (${ENTITIES.join(', ')})
   --base-url URL            URL base da API (padrão https://api.clockify.me/api/v1; regional: https://<região>.api.clockify.me/api/v1)
   --page-size N             tamanho de página para registros de tempo (padrão 1000)
+  --rate-per-second N       requisições por segundo à API (padrão 8; o Clockify permite ~10)
   --dry-run                 apenas conta, não grava nada
   --no-member-profiles      não consulta /member-profile (mais rápido)
   --list-workspaces         lista os workspaces acessíveis pela chave e sai
@@ -38,7 +39,7 @@ async function main() {
   const { values } = parseArgs({
     options: {
       'api-key': { type: 'string' }, 'source-workspace': { type: 'string' }, 'target-workspace': { type: 'string' }, 'new-workspace': { type: 'boolean' },
-      'owner-email': { type: 'string' }, since: { type: 'string' }, entities: { type: 'string' }, 'base-url': { type: 'string' }, 'page-size': { type: 'string' },
+      'owner-email': { type: 'string' }, since: { type: 'string' }, entities: { type: 'string' }, 'base-url': { type: 'string' }, 'page-size': { type: 'string' }, 'rate-per-second': { type: 'string' },
       'dry-run': { type: 'boolean' }, 'no-member-profiles': { type: 'boolean' }, 'list-workspaces': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
     },
     allowNegative: false,
@@ -64,7 +65,7 @@ async function main() {
 
   const options = normalizeOptions({
     sourceWorkspaceId: values['source-workspace'] || undefined, baseUrl, since: values.since || undefined, entities: values.entities || undefined,
-    dryRun: !!values['dry-run'], memberProfiles: values['no-member-profiles'] ? false : undefined, pageSize: values['page-size'] || undefined,
+    dryRun: !!values['dry-run'], memberProfiles: values['no-member-profiles'] ? false : undefined, pageSize: values['page-size'] || undefined, ratePerSecond: values['rate-per-second'] || undefined,
     mode: values['new-workspace'] ? 'NEW_WORKSPACE' : 'INTO_CURRENT',
   });
 

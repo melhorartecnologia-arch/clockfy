@@ -184,8 +184,13 @@ test('lists Clockify workspaces for an API key and rejects bad keys', async () =
   const ws = owner.workspaceId;
   const ok = await owner.call('POST', `/api/v1/workspaces/${ws}/import/clockify/workspaces`, { apiKey: API_KEY, baseUrl: mock.baseUrl });
   assert.equal(ok.status, 200, ok.text);
-  assert.equal(ok.data.user.email, OWNER_EMAIL);
-  assert.deepEqual(ok.data.workspaces.map((w) => w.id), [A.ids.WS, B.ids.WS]);
+  assert.ok(Array.isArray(ok.data));
+  assert.deepEqual(ok.data.map((w) => w.id), [A.ids.WS, B.ids.WS]);
+  assert.equal(ok.data[0].name, 'Clockify WS A');
+  assert.equal(ok.data[0].apiUser.email, OWNER_EMAIL);
+  const viaGet = await owner.call('GET', `/api/v1/workspaces/${ws}/import/clockify/workspaces?apiKey=${API_KEY}&baseUrl=${encodeURIComponent(mock.baseUrl)}`);
+  assert.equal(viaGet.status, 200, viaGet.text);
+  assert.equal(viaGet.data.length, 2);
   const bad = await owner.call('POST', `/api/v1/workspaces/${ws}/import/clockify/workspaces`, { apiKey: 'wrong-key-1234', baseUrl: mock.baseUrl });
   assert.equal(bad.status, 400);
   const entities = await owner.call('GET', '/api/v1/import/entities');
@@ -422,6 +427,21 @@ test('NEW_WORKSPACE mode creates a local workspace with the Clockify id', async 
   const job2 = await waitJob(dup.call, ws, r2.data.jobId);
   assert.equal(job2.status, 'FAILED');
   assert.match(job2.error, /belongs to another user/);
+});
+
+test('a running import can be cancelled cooperatively', async () => {
+  const ws = owner.workspaceId;
+  const r = await owner.call('POST', `/api/v1/workspaces/${ws}/import/clockify`, { apiKey: API_KEY, baseUrl: mock.baseUrl, sourceWorkspaceId: A.ids.WS, ratePerSecond: 1 });
+  assert.equal(r.status, 202, r.text);
+  const busy = await owner.call('POST', `/api/v1/workspaces/${ws}/import/clockify`, { apiKey: API_KEY, baseUrl: mock.baseUrl, sourceWorkspaceId: A.ids.WS });
+  assert.equal(busy.status, 409, 'only one import per workspace at a time');
+  const cancel = await owner.call('POST', `/api/v1/workspaces/${ws}/import/jobs/${r.data.jobId}/cancel`);
+  assert.equal(cancel.status, 200);
+  assert.equal(cancel.data.running, true);
+  const job = await waitJob(owner.call, ws, r.data.jobId);
+  assert.equal(job.status, 'CANCELLED');
+  assert.equal(job.progress.cancelled, true);
+  assert.ok(job.log.some((l) => /cancelada/.test(l)));
 });
 
 // ---------------------------------------------------------------------------------------------------------------

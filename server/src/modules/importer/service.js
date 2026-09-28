@@ -250,7 +250,11 @@ class ImportRun {
     if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
     this.lastFlush = Date.now();
     try { this.onProgress(this.progress); } catch { /* ignore */ }
-    if (!this.job.id) return null;
+    if (!this.job.id) {
+      // not persisted (e.g. CLI dry run of a workspace that does not exist yet): keep the state in memory
+      Object.assign(this.job, { status, progress: this.progress, log: this.logLines, error: error || null, started_at: started ? new Date() : this.job.started_at, finished_at: finished ? new Date() : this.job.finished_at });
+      return this.job;
+    }
     return one(
       `UPDATE import_jobs SET status = $2, progress = $3, log = $4, error = $5, started_at = CASE WHEN $6::boolean THEN now() ELSE started_at END, finished_at = CASE WHEN $7::boolean THEN now() ELSE finished_at END WHERE id = $1 RETURNING *`,
       [this.job.id, status, JSON.stringify(this.progress), JSON.stringify(this.logLines), error || null, !!started, !!finished],
