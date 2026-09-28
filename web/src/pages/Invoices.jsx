@@ -77,7 +77,7 @@ function InvoiceList() {
       <div className="filter-bar">
         <MultiPicker options={statusOptions} value={f.statuses || []} onChange={(v) => patch({ statuses: v })} label="Status: todos" width={170} />
         <MultiPicker options={clients} value={f.clients || []} onChange={(v) => patch({ clients: v })} label="Clientes: todos" width={190} />
-        <input placeholder="Número da fatura…" value={f.number || ''} onChange={(e) => patch({ number: e.target.value })} style={{ width: 160 }} />
+        <input type="text" placeholder="Número da fatura…" value={f.number || ''} onChange={(e) => patch({ number: e.target.value })} style={{ width: 160 }} />
         <span className="muted small">Emissão</span>
         <DateRangePicker start={f.start || ''} end={f.end || ''} onChange={(s, e) => patch({ start: s, end: e })} />
         {(f.start || f.end || f.statuses?.length || f.clients?.length || f.number) ? <button type="button" className="btn link" onClick={() => patch({ statuses: [], clients: [], number: '', start: '', end: '' })}>Limpar</button> : null}
@@ -127,11 +127,11 @@ function NewInvoiceModal({ settings, clients, onClose }) {
   const { data: currencies } = useAsync(() => api.get(`${ws(wsId)}/currencies`).then((l) => (Array.isArray(l) ? l.map((c) => c.code || c).filter(Boolean) : [])), [wsId], { initial: [] });
   const today = toLocalDateStr(new Date(), timeZone);
   const dueDays = Number(settings?.defaults?.dueDays ?? 30);
-  const [f, setF] = useState({ clientId: '', number: pad4(settings?.nextNumber), currency: wsCurrency, issuedDate: today, dueDate: addDays(today, dueDays) });
+  // `number` stays empty unless typed: the server then generates the next sequential number (and skips used ones)
+  const [f, setF] = useState({ clientId: '', number: '', currency: wsCurrency, issuedDate: today, dueDate: addDays(today, dueDays) });
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  useEffect(() => { if (settings?.nextNumber && !f.number) set('number', pad4(settings.nextNumber)); }, [settings]); // eslint-disable-line react-hooks/exhaustive-deps
   const pickClient = (id) => { const c = clients.find((x) => x.id === id); setF((x) => ({ ...x, clientId: id, currency: c?.currencyCode || wsCurrency })); };
   const options = [...new Set([...(currencies || []), wsCurrency, f.currency].filter(Boolean))];
   async function save() {
@@ -148,8 +148,8 @@ function NewInvoiceModal({ settings, clients, onClose }) {
       <Alert type="error">{error}</Alert>
       <div className="field"><label>Cliente *</label><select value={f.clientId} autoFocus onChange={(e) => pickClient(e.target.value)}><option value="">Selecionar…</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
       <div className="grid cols-2">
-        <div className="field"><label>Número</label><input value={f.number} onChange={(e) => set('number', e.target.value)} placeholder={pad4(settings?.nextNumber)} /></div>
-        <div className="field"><label>Moeda</label>{options.length > 1 ? <select value={f.currency} onChange={(e) => set('currency', e.target.value)}>{options.map((c) => <option key={c} value={c}>{c}</option>)}</select> : <input value={f.currency} maxLength={10} onChange={(e) => set('currency', e.target.value.toUpperCase())} />}</div>
+        <div className="field"><label>Número (próximo: {pad4(settings?.nextNumber)})</label><input type="text" value={f.number} onChange={(e) => set('number', e.target.value)} placeholder={`${pad4(settings?.nextNumber)} (automático)`} /></div>
+        <div className="field"><label>Moeda</label>{options.length > 1 ? <select value={f.currency} onChange={(e) => set('currency', e.target.value)}>{options.map((c) => <option key={c} value={c}>{c}</option>)}</select> : <input type="text" value={f.currency} maxLength={10} onChange={(e) => set('currency', e.target.value.toUpperCase())} />}</div>
       </div>
       <div className="grid cols-2">
         <div className="field"><label>Data de emissão</label><input type="date" value={f.issuedDate} onChange={(e) => { const d = e.target.value; setF((x) => ({ ...x, issuedDate: d, dueDate: d ? addDays(d, dueDays) : x.dueDate })); }} /></div>
@@ -204,7 +204,7 @@ function InvoiceSettings() {
     <div>
       <div className="grid cols-2" style={{ alignItems: 'start' }}>
         <div className="card"><div className="card-head"><h3 style={{ margin: 0 }}>Empresa (emitente)</h3></div><div className="card-body">
-          <div className="field"><label>Nome</label><input value={s.company.name || ''} onChange={(e) => setIn('company', 'name', e.target.value)} placeholder={workspace.name} /></div>
+          <div className="field"><label>Nome</label><input type="text" value={s.company.name || ''} onChange={(e) => setIn('company', 'name', e.target.value)} placeholder={workspace.name} /></div>
           <div className="field"><label>Endereço</label><textarea value={s.company.address || ''} onChange={(e) => setIn('company', 'address', e.target.value)} /></div>
           <div className="field"><label>E-mail</label><input type="email" value={s.company.email || ''} onChange={(e) => setIn('company', 'email', e.target.value)} /></div>
           <div className="field"><label>Logo (PNG/JPG)</label>
@@ -220,7 +220,7 @@ function InvoiceSettings() {
             <div className="field"><label>Próximo número</label><input type="number" min="1" value={s.nextNumber} onChange={(e) => setS((x) => ({ ...x, nextNumber: e.target.value }))} /></div>
             <div className="field"><label>Dias para vencimento</label><input type="number" min="0" value={s.defaults.dueDays} onChange={(e) => setIn('defaults', 'dueDays', e.target.value)} /></div>
           </div>
-          <div className="field"><label>Assunto</label><input value={s.defaults.subject || ''} onChange={(e) => setIn('defaults', 'subject', e.target.value)} /></div>
+          <div className="field"><label>Assunto</label><input type="text" value={s.defaults.subject || ''} onChange={(e) => setIn('defaults', 'subject', e.target.value)} /></div>
           <div className="field"><label>Observações</label><textarea value={s.defaults.notes || ''} onChange={(e) => setIn('defaults', 'notes', e.target.value)} placeholder="Ex.: dados bancários, condições de pagamento" /></div>
           <div className="grid cols-3">
             <div className="field"><label>Imposto (%)</label><input type="number" min="0" max="100" step="0.01" value={s.defaults.taxPercent} onChange={(e) => setIn('defaults', 'taxPercent', e.target.value)} /></div>
@@ -235,14 +235,14 @@ function InvoiceSettings() {
         </div></div>
         <div className="card" style={{ marginTop: 0 }}><div className="card-head"><h3 style={{ margin: 0 }}>Tipos de item</h3></div><div className="card-body">
           <div className="row gap wrap mb">{s.itemTypes.map((t) => <span key={t} className="chip">{t}{s.itemTypes.length > 1 && <span style={{ cursor: 'pointer', marginLeft: 4 }} className="muted" onClick={() => setS((x) => ({ ...x, itemTypes: x.itemTypes.filter((y) => y !== t) }))} title="Remover">✕</span>}</span>)}</div>
-          <div className="row gap"><input value={newType} placeholder="Novo tipo (ex.: Consultoria)" onChange={(e) => setNewType(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addType()} /><button type="button" className="btn secondary" onClick={addType}>Adicionar</button></div>
+          <div className="row gap"><input type="text" value={newType} placeholder="Novo tipo (ex.: Consultoria)" onChange={(e) => setNewType(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addType()} /><button type="button" className="btn secondary" onClick={addType}>Adicionar</button></div>
         </div></div>
         <div className="card" style={{ marginTop: 0 }}><div className="card-head"><h3 style={{ margin: 0 }}>Campos exibidos no PDF</h3></div><div className="card-body">
           {Object.entries(EXPORT).map(([k, label]) => <div key={k} className="row mb"><Switch value={!!s.exportFields[k]} onChange={(v) => setIn('exportFields', k, v)} /><span>{label}</span></div>)}
         </div></div>
       </div>
       <div className="card"><div className="card-head"><h3 style={{ margin: 0 }}>Rótulos do PDF</h3><span className="muted small">Deixe o valor padrão em inglês para usar a tradução automática em português.</span></div><div className="card-body">
-        <div className="inv-labels">{Object.entries(LABEL_NAMES).map(([k, name]) => <div key={k} className="field"><label>{name}</label><input value={s.labels[k] ?? ''} onChange={(e) => setIn('labels', k, e.target.value)} /></div>)}</div>
+        <div className="inv-labels">{Object.entries(LABEL_NAMES).map(([k, name]) => <div key={k} className="field"><label>{name}</label><input type="text" value={s.labels[k] ?? ''} onChange={(e) => setIn('labels', k, e.target.value)} /></div>)}</div>
       </div></div>
       <div className="row mt"><button className="btn" onClick={save} disabled={saving}>{saving ? 'Salvando…' : 'Salvar configurações'}</button><button className="btn ghost" onClick={() => setS(JSON.parse(JSON.stringify(data)))} disabled={saving}>Desfazer</button></div>
     </div>

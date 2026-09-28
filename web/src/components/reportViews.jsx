@@ -208,8 +208,8 @@ export function SummaryView({ result, groups = [], currency, dateFormat, customF
     <div>
       <Totals totals={totals} currency={currency} />
       {showChart && list.length > 0 && (
-        <div className="summary-charts">
-          <div><div className="chart-title">Tempo por {perMonth ? 'mês' : 'dia'}</div><BarChart items={bars} /></div>
+        <div className="summary-charts" style={bars.length ? undefined : { gridTemplateColumns: '1fr' }}>
+          {bars.length > 0 && <div><div className="chart-title">Tempo por {perMonth ? 'mês' : 'dia'}</div><BarChart items={bars} /></div>}
           <div><div className="chart-title">Por {headerLabel(groups[0]).toLowerCase()}</div><Donut slices={slices} /></div>
         </div>
       )}

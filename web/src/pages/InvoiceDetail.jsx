@@ -133,8 +133,8 @@ export default function InvoiceDetail() {
           <div className="inv-head">
             <div>
               <div className="grid cols-2">
-                <div className="field"><label>Número</label><input value={form.number} onChange={(e) => setF('number', e.target.value)} /></div>
-                <div className="field"><label>Moeda</label><input value={form.currency} maxLength={10} onChange={(e) => setF('currency', e.target.value.toUpperCase())} /></div>
+                <div className="field"><label>Número</label><input type="text" value={form.number} onChange={(e) => setF('number', e.target.value)} /></div>
+                <div className="field"><label>Moeda</label><input type="text" value={form.currency} maxLength={10} onChange={(e) => setF('currency', e.target.value.toUpperCase())} /></div>
               </div>
               <div className="field"><label>Cliente</label><select value={form.clientId} onChange={(e) => pickClient(e.target.value)}><option value="">Selecionar…</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}{form.clientId && !client && <option value={form.clientId}>{inv.clientName}</option>}</select></div>
               <div className="field"><label>Endereço do cliente</label><textarea value={form.clientAddress} onChange={(e) => setF('clientAddress', e.target.value)} /></div>
@@ -145,7 +145,7 @@ export default function InvoiceDetail() {
                 <div className="field"><label>Vencimento</label><input type="date" value={form.dueDate} onChange={(e) => setF('dueDate', e.target.value)} /></div>
               </div>
               <div className="field"><label>Emitente (de)</label><textarea value={form.billFrom} onChange={(e) => setF('billFrom', e.target.value)} placeholder={workspace.name} /></div>
-              <div className="field"><label>Assunto</label><input value={form.subject} onChange={(e) => setF('subject', e.target.value)} placeholder="Ex.: Serviços prestados em setembro" /></div>
+              <div className="field"><label>Assunto</label><input type="text" value={form.subject} onChange={(e) => setF('subject', e.target.value)} placeholder="Ex.: Serviços prestados em setembro" /></div>
             </div>
           </div>
         </div>
@@ -167,7 +167,7 @@ export default function InvoiceDetail() {
                   <tr key={it.key} className={it.importType !== 'NOT_IMPORTED' ? 'imported' : ''}>
                     <td><span className="move"><button type="button" className="btn ghost" onClick={() => move(it.key, -1)} disabled={i === 0} title="Mover para cima">▲</button><button type="button" className="btn ghost" onClick={() => move(it.key, 1)} disabled={i === items.length - 1} title="Mover para baixo">▼</button></span></td>
                     <td><select value={it.itemType} onChange={(e) => setItem(it.key, { itemType: e.target.value })}>{[...new Set([...itemTypes, it.itemType])].map((t) => <option key={t} value={t}>{t}</option>)}</select></td>
-                    <td><input value={it.description} onChange={(e) => setItem(it.key, { description: e.target.value })} placeholder="Descrição do item" />{it.importType !== 'NOT_IMPORTED' && <div className="small light">{it.importType === 'TIME_ENTRY_IMPORT' ? `${it.timeEntryIds.length} registro(s) de tempo` : `${it.expenseIds.length} despesa(s)`} importado(s)</div>}</td>
+                    <td><input type="text" value={it.description} onChange={(e) => setItem(it.key, { description: e.target.value })} placeholder="Descrição do item" />{it.importType !== 'NOT_IMPORTED' && <div className="small light">{it.importType === 'TIME_ENTRY_IMPORT' ? `${it.timeEntryIds.length} registro(s) de tempo` : `${it.expenseIds.length} despesa(s)`} importado(s)</div>}</td>
                     <td className="num"><input type="number" step="0.01" min="0" value={it.quantity} onChange={(e) => setItem(it.key, { quantity: e.target.value })} /></td>
                     <td className="num"><input type="number" step="0.01" value={it.priceText} onChange={(e) => setItem(it.key, { priceText: e.target.value, unitPrice: toCents(e.target.value) })} /></td>
                     <td><select value={it.applyTaxes} onChange={(e) => setItem(it.key, { applyTaxes: e.target.value })}>{Object.entries(APPLY).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></td>
@@ -211,7 +211,7 @@ export default function InvoiceDetail() {
             <div className="row gap wrap" style={{ alignItems: 'flex-end' }}>
               <div className="field" style={{ marginBottom: 0 }}><label>Valor ({cur})</label><input type="number" step="0.01" min="0" value={payment.amount} placeholder={fromCents(Math.max(0, totals.balance))} onChange={(e) => setPayment((p) => ({ ...p, amount: e.target.value }))} style={{ width: 140 }} /></div>
               <div className="field" style={{ marginBottom: 0 }}><label>Data</label><input type="date" value={payment.date} onChange={(e) => setPayment((p) => ({ ...p, date: e.target.value }))} style={{ width: 160 }} /></div>
-              <div className="field grow" style={{ marginBottom: 0 }}><label>Observação</label><input value={payment.note} onChange={(e) => setPayment((p) => ({ ...p, note: e.target.value }))} placeholder="Ex.: transferência bancária" /></div>
+              <div className="field grow" style={{ marginBottom: 0 }}><label>Observação</label><input type="text" value={payment.note} onChange={(e) => setPayment((p) => ({ ...p, note: e.target.value }))} placeholder="Ex.: transferência bancária" /></div>
               <button className="btn secondary" onClick={() => setPayment((p) => ({ ...p, amount: fromCents(Math.max(0, totals.balance)) }))} disabled={totals.balance <= 0}>Saldo total</button>
               <button className="btn" onClick={addPayment} disabled={busy}>Registrar pagamento</button>
             </div>
@@ -285,7 +285,7 @@ function SendModal({ inv, client, settings, onClose, onSent }) {
   const { workspace, toast } = useStore();
   const wsId = workspace.id;
   const company = settings?.company?.name || workspace.name;
-  const [f, setF] = useState({ to: client?.email || '', cc: (client?.ccEmails || []).join(', '), subject: `Fatura ${inv.number} - ${company}`, message: `Olá ${inv.clientName},\n\nSegue em anexo a fatura ${inv.number} no valor de ${inv.currency} ${fromCents(inv.amount)}, com vencimento em ${String(inv.dueDate).slice(0, 10)}.\n\n${company}` });
+  const [f, setF] = useState({ to: client?.email || '', cc: (Array.isArray(client?.ccEmails) ? client.ccEmails : []).join(', '), subject: `Fatura ${inv.number} - ${company}`, message: `Olá ${inv.clientName},\n\nSegue em anexo a fatura ${inv.number} no valor de ${inv.currency} ${fromCents(inv.amount)}, com vencimento em ${String(inv.dueDate).slice(0, 10)}.\n\n${company}` });
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -302,9 +302,9 @@ function SendModal({ inv, client, settings, onClose, onSent }) {
   return (
     <Modal title="Enviar fatura por e-mail" onClose={onClose} footer={<><button className="btn ghost" onClick={onClose}>Cancelar</button><button className="btn" onClick={send} disabled={busy}>{busy ? 'Enviando…' : 'Enviar'}</button></>}>
       <Alert type="error">{error}</Alert>
-      <div className="field"><label>Para</label><input value={f.to} onChange={(e) => set('to', e.target.value)} placeholder="cliente@empresa.com" autoFocus /></div>
-      <div className="field"><label>Cc</label><input value={f.cc} onChange={(e) => set('cc', e.target.value)} placeholder="opcional, separados por vírgula" /></div>
-      <div className="field"><label>Assunto</label><input value={f.subject} onChange={(e) => set('subject', e.target.value)} /></div>
+      <div className="field"><label>Para</label><input type="text" value={f.to} onChange={(e) => set('to', e.target.value)} placeholder="cliente@empresa.com" autoFocus /></div>
+      <div className="field"><label>Cc</label><input type="text" value={f.cc} onChange={(e) => set('cc', e.target.value)} placeholder="opcional, separados por vírgula" /></div>
+      <div className="field"><label>Assunto</label><input type="text" value={f.subject} onChange={(e) => set('subject', e.target.value)} /></div>
       <div className="field"><label>Mensagem</label><textarea rows={6} value={f.message} onChange={(e) => set('message', e.target.value)} /></div>
       <p className="small muted">O PDF da fatura vai em anexo. A fatura passa a “Enviada”.</p>
     </Modal>

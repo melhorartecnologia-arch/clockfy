@@ -118,7 +118,7 @@ function CustomFieldFilters({ fields, value = [], onChange }) {
             {!c.isEmpty && field.type === 'CHECKBOX' && <select value={String(c.value)} onChange={(e) => set(i, { value: e.target.value })}><option value="true">Sim</option><option value="false">Não</option></select>}
             {!c.isEmpty && field.type === 'DROPDOWN_SINGLE' && <select value={c.value || ''} onChange={(e) => set(i, { value: e.target.value })}><option value="">—</option>{(field.allowedValues || []).map((o) => <option key={o} value={o}>{o}</option>)}</select>}
             {!c.isEmpty && field.type === 'DROPDOWN_MULTIPLE' && <MultiPicker options={(field.allowedValues || []).map((o) => ({ id: o, name: o }))} value={Array.isArray(c.value) ? c.value : []} onChange={(v) => set(i, { value: v })} label="valores…" width={150} />}
-            {!c.isEmpty && (field.type === 'TXT' || field.type === 'LINK') && <input value={c.value ?? ''} placeholder="contém…" onChange={(e) => set(i, { value: e.target.value })} />}
+            {!c.isEmpty && (field.type === 'TXT' || field.type === 'LINK') && <input type="text" value={c.value ?? ''} placeholder="contém…" onChange={(e) => set(i, { value: e.target.value })} />}
             <label className="checkbox" style={{ fontSize: 12, marginBottom: 0 }}><input type="checkbox" checked={!!c.isEmpty} onChange={(e) => set(i, { isEmpty: e.target.checked })} /> vazio</label>
             <span className="x" onClick={() => remove(i)} title="Remover">✕</span>
           </span>
@@ -164,7 +164,7 @@ function FilterBar({ ctx, weekly = false }) {
         <ContainsPicker label="Etiquetas" value={f.tags} onChange={(v) => patch({ tags: v })} options={options.tags} only width={150} />
         <select value={f.billable} onChange={(e) => patch({ billable: e.target.value })} title="Faturável"><option value="ALL">Faturável: todos</option><option value="YES">Faturável</option><option value="NO">Não faturável</option></select>
         <span className="fgroup">
-          <input className="desc" placeholder="Descrição contém…" value={f.description} disabled={f.withoutDescription} onChange={(e) => patch({ description: e.target.value })} style={{ borderRadius: 'var(--radius) 0 0 var(--radius)' }} />
+          <input type="text" className="desc" placeholder="Descrição contém…" value={f.description} disabled={f.withoutDescription} onChange={(e) => patch({ description: e.target.value })} style={{ borderRadius: 'var(--radius) 0 0 var(--radius)' }} />
           <label className="checkbox small" style={{ border: '1px solid var(--border-strong)', borderLeft: 'none', borderRadius: '0 var(--radius) var(--radius) 0', padding: '0 8px', background: '#f7fafc', marginBottom: 0 }} title="Somente registros sem descrição"><input type="checkbox" checked={!!f.withoutDescription} onChange={(e) => patch({ withoutDescription: e.target.checked })} /> sem descrição</label>
         </span>
         <select value={f.invoicingState} onChange={(e) => patch({ invoicingState: e.target.value })} title="Faturamento"><option value="ALL">Faturamento: todos</option><option value="INVOICED">Faturados</option><option value="UNINVOICED">Não faturados</option></select>
@@ -237,14 +237,14 @@ export function SharedReportModal({ report, type, filter, onClose, onSaved }) {
     return (
       <Modal title="Relatório compartilhado" onClose={onClose} footer={<button className="btn" onClick={onClose}>Fechar</button>}>
         <Alert type="success">“{created.name}” foi salvo. {created.isPublic ? 'Qualquer pessoa com o link pode abri-lo.' : 'Apenas usuários autorizados podem abri-lo (é preciso entrar).'}</Alert>
-        <div className="share-link"><input readOnly value={link} onFocus={(e) => e.target.select()} /><button className="btn secondary" onClick={() => copy(link, toast)}>Copiar</button><a className="btn ghost" href={link} target="_blank" rel="noreferrer">Abrir</a></div>
+        <div className="share-link"><input type="text" readOnly value={link} onFocus={(e) => e.target.select()} /><button className="btn secondary" onClick={() => copy(link, toast)}>Copiar</button><a className="btn ghost" href={link} target="_blank" rel="noreferrer">Abrir</a></div>
       </Modal>
     );
   }
   return (
     <Modal title={report ? 'Editar relatório compartilhado' : 'Salvar e compartilhar relatório'} onClose={onClose} footer={<><button className="btn ghost" onClick={onClose}>Cancelar</button><button className="btn" disabled={busy} onClick={save}>{report ? 'Salvar' : 'Criar link'}</button></>}>
       <Alert type="error">{error}</Alert>
-      <div className="field"><label>Nome</label><input value={f.name} autoFocus onChange={(e) => set('name', e.target.value)} placeholder="Ex.: Horas do cliente ACME" /></div>
+      <div className="field"><label>Nome</label><input type="text" value={f.name} autoFocus onChange={(e) => set('name', e.target.value)} placeholder="Ex.: Horas do cliente ACME" /></div>
       <div className="grid cols-2">
         <div className="field"><label>Tipo</label><select value={f.type} disabled={!report && !!type} onChange={(e) => set('type', e.target.value)}>{Object.entries(REPORT_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
         <div className="field"><label>Período</label><label className="checkbox" style={{ marginTop: 8 }}><input type="checkbox" checked={f.fixedDate} onChange={(e) => set('fixedDate', e.target.checked)} /> Data fixa (quem abrir não muda o período)</label></div>
@@ -292,7 +292,7 @@ export function ScheduledReportModal({ report, type, filter, onClose, onSaved })
   return (
     <Modal title={report ? 'Editar agendamento' : 'Agendar envio por e-mail'} onClose={onClose} footer={<><button className="btn ghost" onClick={onClose}>Cancelar</button><button className="btn" disabled={busy} onClick={save}>{report ? 'Salvar' : 'Agendar'}</button></>}>
       <Alert type="error">{error}</Alert>
-      <div className="field"><label>Nome</label><input value={f.name} autoFocus onChange={(e) => set('name', e.target.value)} placeholder="Ex.: Resumo semanal da equipe" /></div>
+      <div className="field"><label>Nome</label><input type="text" value={f.name} autoFocus onChange={(e) => set('name', e.target.value)} placeholder="Ex.: Resumo semanal da equipe" /></div>
       <div className="grid cols-3">
         <div className="field"><label>Tipo</label><select value={f.type} disabled={!report && !!type} onChange={(e) => set('type', e.target.value)}>{Object.entries(REPORT_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
         <div className="field"><label>Frequência</label><select value={f.frequency} onChange={(e) => set('frequency', e.target.value)}>{Object.entries(FREQ).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
@@ -490,7 +490,7 @@ function ExpensesTab({ ctx }) {
       <ResultCard loading={loading} error={error} toolbar={
         <div className="report-toolbar" style={{ borderTop: 'none' }}>
           <MultiPicker options={cats || []} value={o.categories || []} onChange={(v) => setO({ ...o, categories: v })} label="Categorias" width={180} />
-          <input placeholder="Observação contém…" value={o.note || ''} disabled={!!o.withoutNote} onChange={(e) => setO({ ...o, note: e.target.value })} style={{ width: 180 }} />
+          <input type="text" placeholder="Observação contém…" value={o.note || ''} disabled={!!o.withoutNote} onChange={(e) => setO({ ...o, note: e.target.value })} style={{ width: 180 }} />
           <label className="checkbox small" style={{ marginBottom: 0 }}><input type="checkbox" checked={!!o.withoutNote} onChange={(e) => setO({ ...o, withoutNote: e.target.checked })} /> sem observação</label>
           <span className="right"><ReportActions type="EXPENSE_DETAILED" body={request} loading={loading} /></span>
         </div>
@@ -528,7 +528,7 @@ function SharedTab({ ctx }) {
                   <td>{nameOf(r.reportAuthor)}</td>
                   <td>{r.isPublic ? <span className="badge success">Público</span> : <span className="badge" title={[...(r.visibleToUsers || []).map((u) => u.name), ...(r.visibleToUserGroups || []).map((g) => g.name)].join(', ')}>Privado{(r.visibleToUsers?.length || r.visibleToUserGroups?.length) ? ` · ${(r.visibleToUsers?.length || 0) + (r.visibleToUserGroups?.length || 0)}` : ''}</span>}</td>
                   <td className="muted small">{r.fixedDate ? 'Data fixa' : 'Livre'}</td>
-                  <td><span className="share-link"><input readOnly value={link} style={{ width: 220, fontSize: 12 }} onFocus={(e) => e.target.select()} /><button className="btn ghost sm" onClick={() => copy(link, toast)}>Copiar</button></span></td>
+                  <td><span className="share-link"><input type="text" readOnly value={link} style={{ width: 220, fontSize: 12 }} onFocus={(e) => e.target.select()} /><button className="btn ghost sm" onClick={() => copy(link, toast)}>Copiar</button></span></td>
                   <td className="actions">
                     <Dropdown>
                       <a href={link} target="_blank" rel="noreferrer">Abrir</a>

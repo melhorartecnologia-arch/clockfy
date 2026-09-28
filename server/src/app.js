@@ -31,7 +31,7 @@ export function createApp() {
   const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'dist');
   if (fs.existsSync(dist)) {
     app.use(express.static(dist, { index: false, maxAge: '1h' }));
-    app.get(/^(?!\/api|\/reports|\/pto|\/health).*/, (req, res) => res.sendFile(path.join(dist, 'index.html')));
+    app.get(/^(?!\/api\/|\/api$|\/reports\/v1|\/pto\/v1|\/health).*/, (req, res) => res.sendFile(path.join(dist, 'index.html')));
   }
 
   app.use(notFoundHandler);

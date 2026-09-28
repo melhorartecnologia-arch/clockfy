@@ -300,11 +300,11 @@ function CategoryModal({ category, onClose, onSaved }) {
   return (
     <Modal title={category ? 'Editar categoria' : 'Nova categoria'} onClose={onClose} size="sm" footer={<><button className="btn ghost" onClick={onClose}>Cancelar</button><button className="btn" onClick={save} disabled={busy}>{category ? 'Salvar' : 'Criar'}</button></>}>
       <Alert type="error">{error}</Alert>
-      <div className="field"><label>Nome</label><input value={f.name} autoFocus onChange={(e) => set('name', e.target.value)} placeholder="Ex.: Quilometragem" /></div>
+      <div className="field"><label>Nome</label><input type="text" value={f.name} autoFocus onChange={(e) => set('name', e.target.value)} placeholder="Ex.: Quilometragem" /></div>
       <div className="row mb"><Switch value={f.hasUnitPrice} onChange={(v) => set('hasUnitPrice', v)} /><span>Tem preço unitário (valor = quantidade × preço)</span></div>
       {f.hasUnitPrice && (
         <div className="grid cols-2">
-          <div className="field"><label>Unidade</label><input value={f.unit} onChange={(e) => set('unit', e.target.value)} placeholder="km, hora, un." /></div>
+          <div className="field"><label>Unidade</label><input type="text" value={f.unit} onChange={(e) => set('unit', e.target.value)} placeholder="km, hora, un." /></div>
           <div className="field"><label>Preço por unidade ({currency})</label><input type="number" step="0.01" min="0" value={f.price} onChange={(e) => set('price', e.target.value)} placeholder="0,00" /></div>
         </div>
       )}
