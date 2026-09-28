@@ -13,7 +13,20 @@ pool.on('error', (err) => console.error('[pg] idle client error', err));
 const txStorage = new AsyncLocalStorage();
 
 function client() {
-  return txStorage.getStore() || pool;
+  const store = txStorage.getStore();
+  return store ? store.client : pool;
+}
+
+// Runs `cb` after the current transaction commits (or immediately, on the next tick, when not in a transaction).
+export function onCommit(cb) {
+  const store = txStorage.getStore();
+  if (store) store.afterCommit.push(cb);
+  else setImmediate(cb);
+}
+
+// Runs fn outside of any transaction context (queries go to the pool)
+export function outsideTransaction(fn) {
+  return txStorage.exit(fn);
 }
 
 export async function query(text, params = []) {
@@ -39,19 +52,24 @@ export async function value(text, params) {
 // Runs fn inside a transaction; nested calls reuse the outer transaction.
 export async function transaction(fn) {
   const existing = txStorage.getStore();
-  if (existing) return fn(existing);
+  if (existing) return fn(existing.client);
   const c = await pool.connect();
+  const store = { client: c, afterCommit: [] };
+  let result;
   try {
     await c.query('BEGIN');
-    const result = await txStorage.run(c, () => fn(c));
+    result = await txStorage.run(store, () => fn(c));
     await c.query('COMMIT');
-    return result;
   } catch (err) {
     try { await c.query('ROLLBACK'); } catch { /* ignore */ }
     throw err;
   } finally {
     c.release();
   }
+  for (const cb of store.afterCommit) {
+    try { txStorage.exit(cb); } catch (err) { console.error('[db] afterCommit callback failed', err); }
+  }
+  return result;
 }
 
 // Small SQL builder helpers ---------------------------------------------------

@@ -16,6 +16,8 @@ import { extraModules } from './modules/index.js';
 export function registerRoutes(app) {
   const api = Router();
   api.use('/auth', authRouter);
+  // Public / self-authenticating module routes (shared reports, kiosk...) come before the globally authenticated routers
+  for (const m of extraModules) if (m.api) m.api(api);
   api.use('/', usersRouter);          // /user, /workspaces/:workspaceId/users, /file/image, /files/:id
   api.use('/workspaces', workspacesRouter);
 
@@ -33,7 +35,6 @@ export function registerRoutes(app) {
   ws.use('/user/:userId/time-entries', userTimeEntriesRouter);
   for (const m of extraModules) if (m.workspace) m.workspace(ws);
   api.use('/workspaces/:workspaceId', ws);
-  for (const m of extraModules) if (m.api) m.api(api);
 
   app.use('/api/v1', api);
   // Clockify uses separate hosts for reports/PTO APIs; we expose the same routes under these prefixes
