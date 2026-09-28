@@ -196,6 +196,19 @@ router.post('/:workspaceId/currencies', loadWorkspace, async (req, res) => {
   }
   res.status(201).json({ id: c.id, code: c.code, isDefault: !!isDefault });
 });
+router.put('/:workspaceId/currencies/:id', loadWorkspace, async (req, res) => {
+  req.ctx.requireAdmin();
+  const c = await one('SELECT * FROM workspace_currencies WHERE id = $1 AND workspace_id = $2', [req.params.id, req.workspace.id]);
+  if (!c) throw notFound('Currency not found', 404);
+  const { code, isDefault } = parse(z.object({ code: z.string().min(3).max(3).optional(), isDefault: z.boolean().optional() }), req.body);
+  const updated = await one('UPDATE workspace_currencies SET code = COALESCE($2, code) WHERE id = $1 RETURNING *', [c.id, code ? code.toUpperCase() : null]);
+  if (isDefault) {
+    await query('UPDATE workspace_currencies SET is_default = (id = $2) WHERE workspace_id = $1', [req.workspace.id, c.id]);
+    await query('UPDATE workspaces SET hourly_rate_currency = $2 WHERE id = $1', [req.workspace.id, updated.code]);
+  }
+  res.json({ id: updated.id, code: updated.code, isDefault: isDefault ?? updated.is_default });
+});
+
 router.delete('/:workspaceId/currencies/:id', loadWorkspace, async (req, res) => {
   req.ctx.requireAdmin();
   const c = await one('SELECT * FROM workspace_currencies WHERE id = $1 AND workspace_id = $2', [req.params.id, req.workspace.id]);

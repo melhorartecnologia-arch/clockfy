@@ -66,7 +66,7 @@ function GeneralTab({ settings, save, workspace }) {
   async function run(fn, msg) { try { await fn(); await refreshWorkspace(); reloadCurrencies(); if (msg) toast(msg, 'success'); } catch (e) { toast(errorMessage(e), 'error'); } }
   const addCurrency = () => { const code = newCurrency.trim().toUpperCase(); if (!/^[A-Z]{3}$/.test(code)) { toast('Informe um código ISO de 3 letras (ex.: BRL)', 'error'); return; } run(() => api.post(`${ws(wsId)}/currencies`, { code }).then(() => setNewCurrency('')), 'Moeda adicionada'); };
   // The API has no "update currency" route: re-create the code as default (codes are unique per workspace)
-  const setDefault = (c) => run(async () => { await api.delete(`${ws(wsId)}/currencies/${c.id}`); await api.post(`${ws(wsId)}/currencies`, { code: c.code, isDefault: true }); }, `Moeda padrão: ${c.code}`);
+  const setDefault = (c) => run(async () => { await api.put(`${ws(wsId)}/currencies/${c.id}`, { isDefault: true }); }, `Moeda padrão: ${c.code}`);
   const removeCurrency = (c) => run(() => api.delete(`${ws(wsId)}/currencies/${c.id}`), 'Moeda removida');
   const saveRate = (kind, v) => { const cents = inputToCents(v); if (cents == null || cents < 0) { toast('Valor inválido', 'error'); return; } run(() => api.put(`${ws(wsId)}/${kind}`, { amount: cents }), 'Taxa salva'); };
   const saveCapacity = () => { const s = parseDuration(capacity); if (s == null) { toast('Capacidade inválida', 'error'); return; } save({ workCapacity: secondsToIso(s) }); };
