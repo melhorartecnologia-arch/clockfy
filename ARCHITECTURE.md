@@ -51,8 +51,9 @@ export default {
 };
 ```
 
-Dentro de `workspace(router)` já existem `req.user`, `req.workspace`, `req.ctx` (ver abaixo). Rotas em `api(router)` precisam
-aplicar `authenticate` (e `loadWorkspace` se tiverem `:workspaceId`) explicitamente.
+Dentro de `workspace(router)` já existem `req.user`, `req.workspace`, `req.ctx` (ver abaixo). Rotas em `api(router)` são
+montadas ANTES dos routers autenticados (servem para rotas públicas, ex.: relatório compartilhado e quiosque) e precisam
+aplicar `authenticate`/`optionalAuth` (e `loadWorkspace` se tiverem `:workspaceId`) explicitamente.
 
 ## req.ctx (middleware/workspace.js)
 
@@ -72,7 +73,7 @@ aplicar `authenticate` (e `loadWorkspace` se tiverem `:workspaceId`) explicitame
 - Erros: lançar `badRequest('msg')`, `forbidden()`, `notFound()`; o handler devolve `{message, code}` como o Clockify.
 - Listas JSONB: passe arrays/objetos JS ao `insert()`/`update()` (são serializados). Em SQL manual use `JSON.stringify`.
 - Paginação: `paging(req.query)` lê `page`/`page-size` (ou `pageSize`); ordenação `sort(req.query, [...cols])`.
-- Eventos de domínio (`events.emitAsync(nome, payload)`): `time_entry.created|updated|deleted|restored|split`, `timer.started|stopped`,
+- Eventos de domínio (`events.emitAsync(nome, payload)`; entregues após o COMMIT da transação corrente, fora dela): `time_entry.created|updated|deleted|restored|split`, `timer.started|stopped`,
   `project.created|updated|deleted`, `task.*`, `client.*`, `tag.*`, `user.joined_workspace|activated|deactivated|removed|updated|email_changed`,
   `user_group.*`, `rate.updated`. Novos módulos emitem: `approval.created|status_updated`, `time_off.requested|updated|approved|rejected|withdrawn|started`,
   `balance.updated`, `assignment.created|updated|deleted|published`, `expense.created|updated|deleted|restored`, `invoice.created|updated`.

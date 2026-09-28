@@ -44,7 +44,8 @@ export async function authenticate(req, res, next) {
   try {
     const user = await resolveUser(req);
     if (!user) throw unauthorized('Authentication required: use Authorization: Bearer <token> or X-Api-Key', 1000);
-    if (!rateLimit(user.id)) {
+    // Rate limit applies to third-party API-key traffic (like Clockify); the web app uses JWT and bursts freely
+    if (req.authType === 'API_KEY' && !rateLimit(user.id)) {
       res.set('Retry-After', '1');
       return res.status(429).json({ message: 'Too many requests', code: 429 });
     }
