@@ -10,7 +10,7 @@
     "migrate": "node src/cli/migrate.js",
     "seed": "node src/cli/seed.js",
     "import:clockify": "node src/cli/import-clockify.js",
-    "test": "node --test test/"
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "cors": "^2.8.6",
