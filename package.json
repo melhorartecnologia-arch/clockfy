@@ -1,0 +1,19 @@
+{
+  "name": "clockfy",
+  "version": "1.0.0",
+  "description": "Clone completo do Clockify em Node.js + PostgreSQL, com API compatível com a API pública do Clockify e migração de dados.",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "workspaces": ["server", "web"],
+  "scripts": {
+    "dev": "npm run dev --workspace=server",
+    "dev:web": "npm run dev --workspace=web",
+    "build": "npm run build --workspace=web",
+    "start": "npm run start --workspace=server",
+    "migrate": "npm run migrate --workspace=server",
+    "seed": "npm run seed --workspace=server",
+    "test": "npm test --workspace=server",
+    "import:clockify": "npm run import:clockify --workspace=server"
+  }
+}
