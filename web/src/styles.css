@@ -232,7 +232,7 @@ table.table { width: 100%; border-collapse: collapse; background: #fff; }
 @media print { .sidebar, .topbar, .no-print { display: none !important; } .main { margin: 0; padding: 0; } .print-only { display: block; } }
 
 /* Calendar page */
-.calendar-head { display: grid; border-bottom: 1px solid var(--border); background: #fafcfd; position: sticky; top: var(--topbar-h); z-index: 5; }
+.calendar-head { display: grid; border-bottom: 1px solid var(--border); background: #fafcfd; }
 .calendar-head .calendar-day { padding: 8px 10px; border-left: 1px solid var(--border); text-align: center; }
 .calendar-head .calendar-day.today { background: var(--primary-light); }
 .calendar-head .calendar-corner { padding: 8px; text-align: center; }
@@ -268,3 +268,6 @@ table.table { width: 100%; border-collapse: collapse; background: #fff; }
 .notif.unread { background: #f7fcff; cursor: pointer; }
 .notif.unread:hover { background: var(--primary-light); }
 .notif-ico { width: 32px; height: 32px; border-radius: 50%; background: #eef2f4; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+
+/* Cards laid out side by side in a grid must not inherit the stacked-card spacing */
+.grid > .card + .card { margin-top: 0; }

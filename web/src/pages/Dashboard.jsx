@@ -93,6 +93,8 @@ export default function Dashboard() {
           : await Promise.all([endpoints.timeEntries(wsId, user.id, params), Promise.resolve([{ id: user.id, name: user.name, profilePicture: user.profilePicture }])]);
         d = aggregate(entries, { timeZone, start, end, users });
       }
+      // Keep only the days inside the selected range (the API may include boundary days)
+      d.byDay = (d.byDay || []).filter((x) => x.date >= start && x.date <= end);
       setData(d);
     } catch (e) { setError(errorMessage(e)); } finally { setLoading(false); }
   }, [wsId, start, end, sel, type, timeZone, user.id, user.name, user.profilePicture]);
@@ -153,7 +155,7 @@ export default function Dashboard() {
                   <Breakdown items={[{ id: 'b', name: 'Faturável', color: 'var(--primary)', duration: data.billableTime }, { id: 'n', name: 'Não faturável', color: '#c6d0d7', duration: data.nonBillableTime }]} total={Math.max(1, data.totalTime)} showRates={false} />
                 ) : (
                   data.byProject.length === 0 ? <Empty icon="▣" title="Sem projetos">Nenhum tempo registrado em projetos.</Empty>
-                    : <Breakdown items={data.byProject.map((p) => ({ id: p.projectId || 'none', name: p.name, sub: p.clientName, color: p.color, duration: p.duration, amount: p.amount, link: p.projectId ? `/projects/${p.projectId}` : null }))} total={projTotal} showRates={showRates} currency={currency} />
+                    : <Breakdown items={data.byProject.map((p) => ({ id: p.projectId || 'none', name: p.projectId ? p.name : 'Sem projeto', sub: p.clientName, color: p.color, duration: p.duration, amount: p.amount, link: p.projectId ? `/projects/${p.projectId}` : null }))} total={projTotal} showRates={showRates} currency={currency} />
                 )}
               </div>
             </div>
@@ -163,7 +165,7 @@ export default function Dashboard() {
                 <table className="table compact">
                   <thead><tr><th>Descrição</th><th>Projeto</th><th className="num">Duração</th></tr></thead>
                   <tbody>{data.topActivities.map((a, i) => (
-                    <tr key={i}><td className="truncate" style={{ maxWidth: 260 }}>{a.description || <span className="light">(sem descrição)</span>}</td><td className="muted small">{a.projectName || '—'}</td><td className="num mono">{fmtDuration(a.duration)}</td></tr>
+                    <tr key={i}><td className="truncate" style={{ maxWidth: 260 }}>{a.description || <span className="light">(sem descrição)</span>}</td><td className="muted small">{a.projectId ? a.projectName : '—'}</td><td className="num mono">{fmtDuration(a.duration)}</td></tr>
                   ))}</tbody>
                 </table>
               )}
@@ -209,7 +211,7 @@ function Breakdown({ items, total, showRates, currency }) {
         {items.map((it) => {
           const pct = Math.round((it.duration / total) * 100);
           return (
-            <div key={it.id} className="item" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1fr) 2fr auto auto', gap: 10, alignItems: 'center' }}>
+            <div key={it.id} className="item" style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1.6fr) minmax(80px, 1fr) auto auto', gap: 10, alignItems: 'center' }}>
               <span className="row gap truncate"><span className="dot" style={{ background: it.color }} />{it.link ? <Link to={it.link} className="truncate" style={{ color: 'inherit' }}>{it.name}</Link> : <span className="truncate">{it.name}</span>}{it.sub && <span className="light small truncate">– {it.sub}</span>}</span>
               <svg width="100%" height="8" style={{ display: 'block' }}><rect x="0" y="0" width="100%" height="8" rx="4" fill="#eef2f4" /><rect x="0" y="0" width={`${pct}%`} height="8" rx="4" fill={it.color}><title>{pct}%</title></rect></svg>
               <span className="mono nowrap">{fmtDuration(it.duration)} <span className="light small">{pct}%</span></span>

@@ -95,9 +95,10 @@ function GeneralTab({ settings, save, workspace }) {
       </div>
       <div>
         <div className="card"><div className="card-head"><h3 style={{ margin: 0 }}>Dias úteis e capacidade</h3></div><div className="card-body">
-          <SettingRow title="Dias úteis" desc="Usados em relatórios de presença, agenda e folgas.">
+          <div className="setting-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+            <div className="info"><div className="title">Dias úteis</div><div className="desc">Usados em relatórios de presença, agenda e folgas.</div></div>
             <div className="row gap wrap">{WEEKDAYS.map((d) => { const on = (settings.workingDays || []).includes(d); return <label key={d} className="checkbox"><input type="checkbox" checked={on} onChange={(e) => save({ workingDays: e.target.checked ? [...(settings.workingDays || []), d] : (settings.workingDays || []).filter((x) => x !== d) })} />{WEEKDAY_LABELS[d].slice(0, 3)}</label>; })}</div>
-          </SettingRow>
+          </div>
           <SettingRow title="Capacidade diária" desc="Horas esperadas por dia útil (ex.: 8h)."><span className="row gap"><input value={capacity} onChange={(e) => setCapacity(e.target.value)} onBlur={saveCapacity} onKeyDown={(e) => e.key === 'Enter' && e.target.blur()} style={{ width: 100 }} /></span></SettingRow>
         </div></div>
         <div className="card"><div className="card-head"><h3 style={{ margin: 0 }}>Rótulos</h3></div><div className="card-body">
