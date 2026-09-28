@@ -1,6 +1,10 @@
 /* Schedule (Agenda) timeline grid */
 .sched { --sched-label: 230px; --sched-min: 90px; --sched-n: 7; --sched-lane: 30px; border: 1px solid var(--border); background: #fff; border-radius: var(--radius); overflow-x: auto; box-shadow: var(--shadow); }
-.sched.zoom-month { --sched-min: 34px; }
+.sched.zoom-month { --sched-min: 27px; --sched-label: 200px; }
+.sched.zoom-month .sched-day { padding: 5px 0; font-size: 10px; }
+.sched.zoom-month .sched-day b { font-size: 12px; }
+.sched.zoom-month .sched-total { font-size: 10px; }
+.sched.zoom-month .sched-bar { padding: 0 4px; }
 .sched-head, .sched-row, .sched-foot { display: grid; grid-template-columns: var(--sched-label) minmax(0, 1fr); }
 .sched-head { position: sticky; top: 0; z-index: 4; background: #fafcfd; border-bottom: 1px solid var(--border); }
 .sched-row { border-bottom: 1px solid var(--border); }

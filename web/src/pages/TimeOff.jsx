@@ -270,7 +270,7 @@ function BalancesTab({ policies, isTeamManager }) {
     <div className="card">
       <div className="filter-bar">
         <input type="search" placeholder="Buscar membro…" value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 200 }} />
-        <label className="checkbox" style={{ marginBottom: 0 }}><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> Incluir políticas arquivadas</label>
+        <label className="checkbox" style={{ marginBottom: 0 }}><input type="checkbox" style={{ minWidth: 0 }} checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> Incluir políticas arquivadas</label>
         <span className="muted small">{rowsByUser.length} membro(s)</span>
         {isAdmin && <button className="btn right" disabled={!active.length} onClick={() => setAdjust({ policyId: active[0]?.id, userIds: [] })}>Ajustar saldo</button>}
       </div>
@@ -618,7 +618,7 @@ function CalendarTab({ policies }) {
     <div className="card">
       <div className="filter-bar">
         <div className="btn-group"><button className="btn secondary sm" onClick={() => setMonth(addDays(first, -1).slice(0, 7))}>‹</button><button className="btn secondary sm" onClick={() => setMonth(today.slice(0, 7))}>Hoje</button><button className="btn secondary sm" onClick={() => setMonth(addDays(last, 1).slice(0, 7))}>›</button></div>
-        <span className="bold" style={{ textTransform: 'capitalize' }}>{monthName(first)}</span>
+        <span className="bold">{monthName(first).charAt(0).toUpperCase() + monthName(first).slice(1)}</span>
         {loading && <Spinner />}
         <span className="right row gap small muted"><span className="chip" style={{ background: '#e9eef1' }}>Feriado</span><span className="chip" style={{ background: 'var(--primary-light)' }}>Folga aprovada</span><span className="chip" style={{ background: '#fff', border: '1px dashed var(--border-strong)' }}>Folga pendente</span></span>
       </div>

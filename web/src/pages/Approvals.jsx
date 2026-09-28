@@ -121,7 +121,7 @@ function RequestsTab({ states, period, isTeamManager }) {
   return (
     <div className="card">
       <div className="filter-bar">
-        <label className="checkbox" style={{ marginBottom: 0 }}><input type="checkbox" checked={allPeriods} onChange={(e) => setAllPeriods(e.target.checked)} /> Todos os períodos</label>
+        <label className="checkbox" style={{ marginBottom: 0 }}><input type="checkbox" style={{ minWidth: 0 }} checked={allPeriods} onChange={(e) => setAllPeriods(e.target.checked)} /> Todos os períodos</label>
         <span className="muted small">{list.length} planilha(s)</span>
         <button className="btn ghost sm right" onClick={reload} title="Atualizar">↻</button>
       </div>
@@ -200,7 +200,8 @@ function UnsubmittedTab({ period }) {
       message: `Enviar a planilha de ${r.userName} (${fmtDate(period.start, dateFormat)} – ${fmtDate(period.end, dateFormat)}) para aprovação em nome do membro? Os registros ficarão bloqueados até a revisão.`,
       onConfirm: async () => {
         try {
-          const hasPrev = r.requests.some((x) => ['REJECTED', 'WITHDRAWN_SUBMISSION', 'WITHDRAWN_APPROVAL'].includes(x.state));
+          // an existing request for the period (approved, rejected or withdrawn) is re-opened with the new items
+          const hasPrev = r.requests.some((x) => x.state !== 'PENDING');
           await api.post(`${ws(wsId)}/approval-requests/users/${r.userId}${hasPrev ? '/resubmit-entries-for-approval' : ''}`, { period: period.kind, periodStart: period.startIso });
           toast('Planilha enviada para aprovação', 'success'); reload();
         } catch (e) { toast(errorMessage(e), 'error'); throw e; }
@@ -212,7 +213,7 @@ function UnsubmittedTab({ period }) {
   return (
     <div className="card">
       <div className="filter-bar">
-        <label className="checkbox" style={{ marginBottom: 0 }}><input type="checkbox" checked={onlyPending} onChange={(e) => setOnlyPending(e.target.checked)} /> Somente com horas não enviadas</label>
+        <label className="checkbox" style={{ marginBottom: 0 }}><input type="checkbox" style={{ minWidth: 0 }} checked={onlyPending} onChange={(e) => setOnlyPending(e.target.checked)} /> Somente com horas não enviadas</label>
         <span className="muted small">{list.length} membro(s)</span>
         <button className="btn ghost sm right" onClick={reload} title="Atualizar">↻</button>
       </div>
@@ -265,7 +266,7 @@ function MemberView({ period, nav }) {
 
   async function submit() {
     try {
-      const hasPrev = me?.requests?.some((x) => ['REJECTED', 'WITHDRAWN_SUBMISSION', 'WITHDRAWN_APPROVAL'].includes(x.state));
+      const hasPrev = me?.requests?.some((x) => x.state !== 'PENDING');
       await api.post(`${ws(wsId)}/approval-requests${hasPrev ? '/resubmit-entries-for-approval' : ''}`, { period: period.kind, periodStart: period.startIso });
       toast('Planilha enviada para aprovação', 'success'); reloadAll();
     } catch (e) { toast(errorMessage(e), 'error'); throw e; }
