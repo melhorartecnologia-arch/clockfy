@@ -24,26 +24,43 @@ Documentação da API (OpenAPI 3 + Redoc): `http://localhost:3000/api/docs`.
 - Node.js 20+ (testado com 22)
 - PostgreSQL 13+ (testado com 16)
 
-## Executando com Docker (recomendado)
+## Instalação em produção (Ubuntu 24.04, sem Docker e sem build)
+
+A interface já vem compilada no repositório (`web/dist`), então o servidor só precisa de Node.js e PostgreSQL.
+O instalador faz tudo (Node 22, PostgreSQL 16, banco, usuário de serviço, `.env`, systemd, Nginx, HTTPS, firewall e backup diário):
 
 ```bash
-cp .env.example .env            # ajuste JWT_SECRET, APP_URL e SMTP se quiser e-mails
-docker compose up -d --build
+sudo apt-get install -y git
+git clone https://github.com/melhorartecnologia-arch/clockfy.git /tmp/clockfy-src
+sudo DOMAIN=clockfy.suaempresa.com.br LETSENCRYPT_EMAIL=voce@suaempresa.com.br BRANCH=main \
+     bash /tmp/clockfy-src/deploy/install-ubuntu.sh
 ```
 
-Acesse `http://localhost:3000`, crie sua conta (o primeiro cadastro cria um workspace e o usuário vira dono/admin).
+Depois, abra `https://clockfy.suaempresa.com.br`, crie a primeira conta (vira administrador) e configure o SMTP em
+`/opt/clockfy/server/.env` se quiser e-mails. Atualização: `sudo /opt/clockfy/deploy/update.sh`.
+Guia completo passo a passo (EC2, DNS, SES, backups no S3): [docs/Clockfy-Instalacao-Ubuntu-24-AWS.pdf](docs/Clockfy-Instalacao-Ubuntu-24-AWS.pdf).
 
-## Executando sem Docker
+Passos manuais equivalentes:
 
 ```bash
-npm install                     # instala server/ e web/ (workspaces npm)
-cp .env.example server/.env     # configure DATABASE_URL (banco vazio) e JWT_SECRET
-npm run migrate                 # cria o schema (também roda automaticamente ao subir)
-npm run build                   # compila a SPA (web/dist), servida pelo próprio servidor
-npm start                       # http://localhost:3000
+npm ci --omit=dev --workspace=server    # apenas dependências do servidor
+cp .env.example server/.env             # configure DATABASE_URL, JWT_SECRET e APP_URL
+npm run migrate                         # cria o schema (também roda automaticamente ao subir)
+NODE_ENV=production npm start           # http://localhost:3000 – serve a API e a interface de web/dist
 ```
 
-Desenvolvimento com recarga automática: `npm run dev` (API em :3000) e `npm run dev:web` (Vite em :5173 com proxy).
+Arquivos de implantação em `deploy/`: `clockfy.service` (systemd), `nginx-clockfy.conf`, `backup.sh`, `restore.sh`, `update.sh`.
+
+## Desenvolvimento
+
+```bash
+npm install                     # instala server/ e web/ (inclui Vite e React)
+npm run dev                     # API em :3000 com recarga automática
+npm run dev:web                 # Vite em :5173 com proxy para a API
+npm run build                   # recompila web/dist (versione o resultado ao alterar a interface)
+```
+
+Também é possível usar Docker (`docker compose up -d --build`), mas não é necessário.
 
 Dados de demonstração: `npm run seed` (usuário `admin@clockfy.local` / `admin123`).
 
