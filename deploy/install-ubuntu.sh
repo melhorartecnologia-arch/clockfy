@@ -52,7 +52,10 @@ if ! command -v node >/dev/null 2>&1 || [ "$(node -v | cut -d. -f1 | tr -d v)" -
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null
   apt-get install -y -qq nodejs >/dev/null
 fi
-ok "Node.js $(node -v) / npm $(npm -v)"
+NODE_BIN=$(command -v node); NPM_BIN=$(command -v npm)
+ok "Node.js $($NODE_BIN -v) / npm $($NPM_BIN -v) ($NODE_BIN)"
+# executa comandos como o usuário de serviço mantendo PATH e proxy (se houver)
+as_service() { sudo -u "$SERVICE_USER" env PATH="$PATH" HOME="$APP_DIR" ${HTTPS_PROXY:+HTTPS_PROXY="$HTTPS_PROXY"} ${HTTP_PROXY:+HTTP_PROXY="$HTTP_PROXY"} ${NODE_EXTRA_CA_CERTS:+NODE_EXTRA_CA_CERTS="$NODE_EXTRA_CA_CERTS"} bash -c "$1"; }
 
 if ! command -v psql >/dev/null 2>&1; then
   log "Instalando PostgreSQL"
@@ -81,7 +84,8 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
 ok "código pronto"
 
 log "Instalando dependências de produção (somente servidor)"
-sudo -u "$SERVICE_USER" bash -c "cd '$APP_DIR' && npm ci --omit=dev --workspace=server --no-audit --no-fund --loglevel=error"
+as_service "cd '$APP_DIR' && '$NPM_BIN' ci --omit=dev --workspace=server --no-audit --no-fund --loglevel=error" || true
+[ -d "$APP_DIR/node_modules/pg" ] && [ -d "$APP_DIR/node_modules/express" ] || fail "npm ci não instalou as dependências (veja $APP_DIR/.npm/_logs); verifique o acesso à internet e tente de novo"
 ok "dependências instaladas"
 
 # ------------------------------------------------------------- 3. banco
@@ -117,7 +121,7 @@ SMTP_PORT=587
 SMTP_SECURE=false
 SMTP_USER=
 SMTP_PASS=
-SMTP_FROM=Clockfy <no-reply@${DOMAIN:-localhost}>
+SMTP_FROM="Clockfy <no-reply@${DOMAIN:-localhost}>"
 RATE_LIMIT_PER_SECOND=50
 SCHEDULER_ENABLED=true
 MAX_UPLOAD_BYTES=10485760
@@ -129,11 +133,11 @@ else
 fi
 
 log "Aplicando migrações do banco"
-sudo -u "$SERVICE_USER" bash -c "cd '$APP_DIR/server' && node src/cli/migrate.js" | tail -1
+as_service "cd '$APP_DIR/server' && '$NODE_BIN' src/cli/migrate.js" | tail -1
 
 # ------------------------------------------------------------ 5. systemd
 install -m 644 "$APP_DIR/deploy/clockfy.service" /etc/systemd/system/clockfy.service
-sed -i "s#/opt/clockfy#$APP_DIR#g" /etc/systemd/system/clockfy.service
+sed -i -e "s#/opt/clockfy#$APP_DIR#g" -e "s#ExecStart=/usr/bin/node#ExecStart=$NODE_BIN#" /etc/systemd/system/clockfy.service
 systemctl daemon-reload
 systemctl enable clockfy >/dev/null 2>&1
 systemctl restart clockfy
@@ -171,7 +175,7 @@ systemctl enable --now fail2ban >/dev/null 2>&1 || true
 
 # ------------------------------------------------------------- 8. backup
 mkdir -p /var/backups/clockfy
-( crontab -l 2>/dev/null | grep -v 'deploy/backup.sh' ; echo "0 3 * * * $APP_DIR/deploy/backup.sh >> /var/log/clockfy-backup.log 2>&1" ) | crontab -
+( crontab -l 2>/dev/null | grep -v 'deploy/backup.sh' || true; echo "0 3 * * * $APP_DIR/deploy/backup.sh >> /var/log/clockfy-backup.log 2>&1" ) | crontab -
 ok "backup diário agendado (03:00) em /var/backups/clockfy"
 
 echo
