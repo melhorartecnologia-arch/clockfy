@@ -43,7 +43,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 # ---------------------------------------------------------------- 1. pacotes
 log "Atualizando pacotes do sistema"
-apt-get update -qq
+apt-get update -qq || echo "[aviso] apt-get update terminou com avisos"
 apt-get install -y -qq curl git ca-certificates gnupg ufw fail2ban unattended-upgrades openssl cron sudo >/dev/null
 ok "pacotes básicos"
 
