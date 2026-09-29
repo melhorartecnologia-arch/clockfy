@@ -84,6 +84,9 @@ export default function Dashboard() {
       let d;
       try {
         d = await api.get(`${ws(wsId)}/dashboard`, { start: startIso, end: endIso, selection: sel, type });
+        // The endpoint reports amounts in currency units (like the reports API); the page works in cents
+        const cents = (v) => Math.round((Number(v) || 0) * 100);
+        d = { ...d, earned: cents(d.earned), byProject: (d.byProject || []).map((p) => ({ ...p, amount: cents(p.amount) })), topActivities: (d.topActivities || []).map((a) => (a.amount != null ? { ...a, amount: cents(a.amount) } : a)) };
       } catch (err) {
         if (err.status !== 404 && err.status !== 501) throw err;
         // Fallback: aggregate in the browser from time entries
