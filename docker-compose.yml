@@ -14,7 +14,7 @@ services:
       timeout: 5s
       retries: 20
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"   # acessível só localmente (backups/psql); remova para não expor
 
   app:
     build: .

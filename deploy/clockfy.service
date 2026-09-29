@@ -1,0 +1,20 @@
+# /etc/systemd/system/clockfy.service  (instalação sem Docker)
+[Unit]
+Description=Clockfy - controle de horas (clone do Clockify)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=clockfy
+Group=clockfy
+WorkingDirectory=/opt/clockfy/server
+EnvironmentFile=-/opt/clockfy/server/.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
