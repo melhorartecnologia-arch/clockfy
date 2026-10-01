@@ -122,7 +122,7 @@ router.put('/password', authenticate, async (req, res) => {
   res.json({ ok: true });
 });
 
-// API keys (Clockify: Profile settings > API) -----------------------------
+// API keys (Clockify: Preferences > Advanced > Manage API keys) ------------
 router.get('/api-keys', authenticate, async (req, res) => {
   const keys = await rows('SELECT id, name, key_prefix, last_used_at, created_at FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC', [req.user.id]);
   res.json(keys.map((k) => ({ id: k.id, name: k.name, prefix: k.key_prefix, lastUsedAt: k.last_used_at, createdAt: k.created_at })));

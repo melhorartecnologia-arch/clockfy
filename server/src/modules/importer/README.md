@@ -14,14 +14,18 @@ Há duas formas de importar:
 
 ## 1. Gerar a chave de API no Clockify
 
-1. Entre no Clockify com um usuário **administrador (ou dono)** do workspace que será migrado – só administradores
-   enxergam os dados de todos os membros.
-2. Abra **Profile settings** (menu do avatar, canto superior direito) e role até a seção **API**.
-3. Clique em **Generate** em *API key* e copie a chave (ela não é exibida novamente).
-4. Se a sua conta estiver em um data center regional, anote também a URL regional
-   (ex.: `https://euc1.api.clockify.me/api/v1`) para informar em `baseUrl`/`--base-url`.
+1. Entre no Clockify com a conta do **proprietário ou de um administrador** do workspace que será migrado – só eles
+   enxergam os dados de todos os membros. (A tela de importação avisa quando a chave não é de um administrador.)
+2. Clique na sua foto (canto superior direito) → **Preferências** → aba **Avançado**.
+3. Em **Gerenciar chaves de API**, clique em **Gerar nova** e copie a chave (ela não é exibida novamente).
+4. **Servidor**: não é preciso informar nada para a nuvem global nem para as regiões de dados – o importador procura a
+   conta e o workspace em `api.clockify.me` e nas regiões `euc1` (UE/Alemanha), `use2` (EUA), `euw2` (Reino Unido) e
+   `apse2` (Austrália), usando `https://{região}.clockify.me/api/v1` e `/report/v1`. Workspaces com **subdomínio**
+   (`https://empresa.clockify.me`) exigem uma chave gerada **dentro do subdomínio** e o endereço em `baseUrl`/`--base-url`.
 
 > A chave nunca é gravada no banco: ela fica apenas em memória durante a execução do job e não aparece nas respostas.
+> Por segurança, a API web só aceita endereços `https://*.clockify.me` como servidor de origem (o servidor não faz
+> requisições a endereços internos); para um espelho próprio da API libere o host em `CLOCKIFY_IMPORT_ALLOWED_HOSTS`.
 
 ## 2. Executar pela interface / API
 
@@ -29,9 +33,10 @@ Todos os endpoints abaixo exigem um administrador do workspace local e ficam sob
 `/api/v1/workspaces/{workspaceId}/import`.
 
 1. **Descobrir os workspaces da chave**
-   `POST /import/clockify/workspaces` `{ "apiKey": "...", "baseUrl": "opcional" }` →
-   `[{ id, name, imageUrl, memberships, hourlyRate, currencies, apiUser: { id, email, name } }]`
-   (também aceito via `GET ...?apiKey=...`). Chave inválida → `400`.
+   `POST /import/clockify/workspaces` `{ "apiKey": "...", "region": "opcional", "baseUrl": "opcional" }` →
+   `[{ id, name, imageUrl, memberships, hourlyRate, currencies, region, regionLabel, access, apiUser: { id, email, name }, apiEndpoint }]`
+   (também aceito via `GET ...?apiKey=...`). `access` diz se o dono da chave administra o workspace no Clockify
+   (`ADMIN`, `NOT_ADMIN` ou `UNKNOWN`). Chave inválida → `400`.
 2. **Iniciar a importação**
    `POST /import/clockify`
    ```json
@@ -42,17 +47,25 @@ Todos os endpoints abaixo exigem um administrador do workspace local e ficam sob
      "since": "2010-01-01",                 // opcional – só registros a partir desta data
      "entities": ["users", "projects"],    // opcional – etapas a executar (padrão: todas)
      "dryRun": false,                        // true = apenas conta, não grava
-     "baseUrl": "https://api.clockify.me/api/v1",
+     "region": "auto",                       // auto (padrão) | global | euc1 | use2 | euw2 | apse2
+     "baseUrl": "https://empresa.clockify.me", // só para workspaces em subdomínio
+     "reconcile": true,                      // false = não confere com o relatório detalhado
      "memberProfiles": true,                 // false = não consulta /member-profile (mais rápido)
-     "pageSize": 1000,                       // página dos registros de tempo (1..5000)
+     "pageSize": 1000,                       // página dos registros de tempo (1..1000)
      "ratePerSecond": 8                      // requisições/s (Clockify permite ~10; só aumente contra um espelho/mock)
    }
    ```
    Resposta `202 { jobId, status }`. A importação roda em segundo plano.
 3. **Acompanhar**
    `GET /import/jobs` (lista) e `GET /import/jobs/{jobId}` → `status` (`PENDING | RUNNING | DONE | FAILED | CANCELLED`),
-   `progress` (`stage`, `current`, `total`, `counts`, `details`, `userMap`, `stages`, `requests`) e `log` (últimas 500 linhas).
+   `progress` (`stage`, `current`, `total`, `counts`, `details`, `userMap`, `stages`, `requests`, `warnings`,
+   `reconciliation`, `sourceAccess`, `sourceEndpoint`) e `log` (últimas 500 linhas).
 4. **Cancelar** (cooperativo, entre lotes): `POST /import/jobs/{jobId}/cancel`.
+
+Só uma importação por workspace roda por vez (`409`). Se o processo que executa um job morrer (reinício do servidor,
+queda, CLI interrompido), o job é marcado como `FAILED` com `progress.interrupted = true` – na inicialização do
+servidor ou na próxima consulta (cada job grava um “batimento” a cada 20 s). Basta executar de novo: a importação é
+idempotente.
 
 Etapas disponíveis em `entities`: `workspace, users, userGroups, clients, projects, tasks, tags, customFields, timeEntries,
 expenses, holidays, timeOff, approvals, scheduling, invoices, webhooks` (`GET /api/v1/import/entities`). A falha de uma
@@ -81,28 +94,30 @@ npm run import:clockify -- --api-key CHAVE --source-workspace 5f0c… --target-w
 npm run import:clockify -- --api-key CHAVE --source-workspace 5f0c… --new-workspace --owner-email admin@empresa.com
 
 # opções extras
-#   --since 2024-01-01   --entities users,projects,timeEntries   --base-url https://euc1.api.clockify.me/api/v1
-#   --dry-run            --page-size 1000                        --no-member-profiles
+#   --since 2024-01-01   --entities users,projects,timeEntries   --region euc1   --base-url https://empresa.clockify.me
+#   --dry-run            --page-size 1000                        --no-member-profiles   --no-reconcile
 ```
 
 O CLI usa as mesmas funções do serviço (`runClockifyImport`), imprime o log e o progresso no terminal, grava o job em
-`import_jobs` e termina com código 0 (`DONE`) ou 1. Variáveis de ambiente: `DATABASE_URL`, `CLOCKIFY_API_KEY`,
-`CLOCKIFY_BASE_URL`.
+`import_jobs`, imprime no fim a conferência por pessoa e os avisos e termina com código 0 (`DONE` e conferência OK),
+2 (`DONE`, mas há registros do Clockify que não estão no Clockfy) ou 1 (falha/cancelamento). Variáveis de ambiente:
+`DATABASE_URL`, `CLOCKIFY_API_KEY`, `CLOCKIFY_REGION`, `CLOCKIFY_BASE_URL`.
 
 ## 4. O que é preservado e como é mapeado
 
 | Clockify | Clockfy | Observações |
 |----------|---------|-------------|
 | Workspace (`workspaceSettings`, `hourlyRate`, `costRate`, `currencies`) | `workspaces.settings` (mesmas chaves), taxas, `workspace_currencies` | em `INTO_CURRENT` as configurações do Clockify sobrescrevem as locais |
-| Usuários (`/users?include-roles=true&status=ALL&memberships=ALL`) | `users`, `workspace_members`, `roles` | relacionados **pelo e-mail**: se já existe conta local (ex.: quem importa) usa-se o id local e o mapeamento fica em `progress.userMap`; caso contrário o usuário é criado com o **mesmo id** do Clockify, status `PENDING_EMAIL_VERIFICATION`, sem senha (entra por “esqueci a senha” ou convite). `membershipStatus` → status do membro; `WORKSPACE_ADMIN`/`TEAM_MANAGER`/`PROJECT_MANAGER` → `roles` |
+| Usuários (`/users?include-roles=true&status=ALL&memberships=ALL` + `account-statuses=LIMITED`, `DELETED`, `LIMITED_DELETED`) | `users`, `workspace_members`, `roles` | relacionados **pelo e-mail**: se já existe conta local (ex.: quem importa) usa-se o id local e o mapeamento fica em `progress.userMap`; caso contrário o usuário é criado com o **mesmo id** do Clockify, status `PENDING_EMAIL_VERIFICATION`, sem senha (entra por “esqueci a senha” ou convite). Usuários **limitados** (quiosque, sem e-mail) e **contas excluídas** – que a listagem padrão do Clockify omite – recebem um e-mail fictício `clockify-{id}@sem-email.invalid` (não recebe e-mails nem faz login), status `NOT_REGISTERED`/`DELETED`. `membershipStatus` → status do membro; `WORKSPACE_ADMIN`/`OWNER`/`TEAM_MANAGER`/`PROJECT_MANAGER` → `roles` |
+| Pessoas **removidas** do workspace | `users` + membro `INACTIVE` | não aparecem na listagem de usuários do Clockify, mas seus registros continuam nos relatórios: são encontradas pelo relatório detalhado (e pelas despesas) e incluídas como membros inativos, com o histórico |
 | Grupos | `user_groups`, `user_group_members`, gerentes de equipe → `roles` | |
 | Clientes (arquivados e ativos) | `clients` | moeda mapeada pelo código |
 | Projetos (`hydrated=true`, arquivados, templates) | `projects`, `project_members` (com taxas), estimativas de tempo/orçamento, nota, cor, público/privado | |
 | Tarefas (`is-active` true/false) | `tasks`, `task_assignees`, `task_user_groups` | |
 | Etiquetas | `tags` | |
 | Campos personalizados (+ `projectDefaultValues`) | `custom_fields`, `custom_field_project_defaults`, valores de usuário | |
-| Registros de tempo (por usuário, janelas de 1 ano, `page-size=1000`) | `time_entries` (`origin='IMPORT'`), `time_entry_tags`, `custom_field_values` | start/end/duração, descrição, projeto/tarefa/etiquetas, faturável, tipo, `isLocked`→`locked`, `kioskId`, taxas (`hourlyRate`/`costRate` do Clockify ou resolvidas pela hierarquia local). Timer em andamento é importado só se não houver timer local rodando |
-| Despesas (+ categorias, recibos) | `expenses`, `expense_categories`, `files` | recibos baixados de `/expenses/{id}/files/{fileId}` |
+| Registros de tempo (por usuário, janelas de 1 ano, `page-size=1000`; depois o relatório detalhado) | `time_entries` (`origin='IMPORT'`), `time_entry_tags`, `custom_field_values` | start/end/duração, descrição, projeto/tarefa/etiquetas, faturável, tipo, `isLocked`→`locked`, `kioskId`, taxas (`hourlyRate`/`costRate` do Clockify ou resolvidas pela hierarquia local). Timer em andamento é importado só se não houver timer local rodando |
+| Despesas (+ categorias, recibos; listagem do workspace inteiro e por usuário) | `expenses`, `expense_categories`, `files` | recibos baixados de `/expenses/{id}/files/{fileId}` |
 | Feriados | `holidays`, `holiday_users`, `holiday_groups` | |
 | Folgas (políticas, saldos, solicitações) | `time_off_policies`, `time_off_balances`, `time_off_requests` | |
 | Aprovações (todos os status) | `approval_requests` + `approval_status` nos registros/despesas | |
@@ -115,6 +130,27 @@ demais). **Nenhum evento de domínio é emitido** – nada de webhooks/notifica�
 
 A escrita é feita diretamente no banco com `INSERT … ON CONFLICT (id) DO UPDATE`, por lotes em transações; um registro
 inválido não descarta o lote (é reprocessado individualmente e o erro vai para o log).
+
+### Conferência com o relatório detalhado (sem perda de histórico)
+
+Depois de ler os registros pessoa a pessoa, o importador percorre o **relatório detalhado** do Clockify
+(`POST {relatórios}/workspaces/{id}/reports/detailed`, todos os usuários e status, fuso UTC, sem arredondamento) do
+`since` até agora, em períodos de 1 ano – ou de 31 dias, no plano FREE, que limita o relatório a um mês. Com isso:
+
+- registros que a listagem por pessoa não trouxe – em especial de **quem saiu do workspace** – são importados;
+- cada registro do relatório é procurado no banco e o resultado fica em `progress.reconciliation`:
+  `clockify {entries, seconds}`, `local {entries, seconds}`, `missing`, `recovered`, `users[]` (por pessoa),
+  `missingSamples[]`, `removedUsers[]`. A tela mostra a tabela “Conferência com o Clockify” e o CLI imprime o resumo.
+
+Timers em andamento não aparecem em relatórios (são importados pela listagem por pessoa). Desative com
+`reconcile: false` / `--no-reconcile`.
+
+### Paginação segura
+
+Toda listagem descarta itens repetidos e termina se uma página não trouxer nada novo (servidor que ignore `page`). Uma
+página “curta” com tamanho típico de limite do servidor (50, 100, 200, 500, 1000…) não é tratada como a última: a
+próxima é consultada e, se trouxer itens, esse tamanho passa a ser o tamanho efetivo – o Clockify pode limitar
+`page-size` silenciosamente. Cada requisição tem tempo-limite de 60 s e é repetida em falhas de rede, `429` e `5xx`.
 
 ## 5. Reexecução e sincronização incremental
 
@@ -132,10 +168,15 @@ inválido não descarta o lote (é reprocessado individualmente e o erro vai par
 - Fotos de perfil ficam apenas como URL (`profilePicture`), não são baixadas.
 - Relatórios compartilhados/agendados, alertas, lembretes, quiosques e histórico de taxas não estão na API pública do
   Clockify e não são importados.
-- A API do Clockify limita ~10 requisições/s por chave: o cliente usa 8 req/s com retentativas (429/5xx/rede, até 5x,
-  respeitando `Retry-After`). Workspaces grandes podem levar dezenas de minutos (≈ 1 requisição por usuário × ano de
-  registros, mais 2 por projeto para tarefas). Use `--no-member-profiles` para acelerar.
-- Em `INTO_CURRENT`, se um id do Clockify já existir em **outro** workspace local, o registro é ignorado (log).
+- A API do Clockify limita ~10 requisições/s por chave: o cliente usa 8 req/s com retentativas (429/5xx/rede/tempo
+  esgotado, até 5x, respeitando `Retry-After`). Workspaces grandes podem levar dezenas de minutos (≈ 1 requisição por
+  usuário × ano de registros, mais 2 por projeto para tarefas, mais o relatório detalhado). Use `--no-member-profiles`
+  para acelerar.
+- Folgas, aprovações e agenda de pessoas que já saíram do workspace (sem registros de tempo nem despesas) não têm a
+  quem ser atribuídas e são contadas como ignoradas.
+- Os ids do Clockify são preservados, então um registro não pode estar em dois workspaces locais: se o mesmo workspace
+  do Clockify já foi importado para **outro** workspace local, os registros existentes lá são ignorados e o job avisa
+  (no início e com um resumo no fim, e a conferência acusa os registros faltando). Reimporte no mesmo workspace local.
 - Faturas cujo número já exista localmente com outro id não são importadas (restrição de unicidade).
 
 ## 7. Importar CSV exportado do Clockify
@@ -173,5 +214,8 @@ O job fica registrado em `import_jobs` com `source = 'CLOCKIFY_CSV'`.
 ## 8. Testes
 
 `node --test test/importer.test.js` sobe um servidor HTTP local que simula a API do Clockify e valida importação por API
-(ids preservados, mapeamento por e-mail, dryRun, reexecução idempotente, modo `NEW_WORKSPACE`) e por CSV (inglês e
-português).
+(ids preservados, mapeamento por e-mail, dryRun, reexecução idempotente, modo `NEW_WORKSPACE`, usuários limitados sem
+e-mail, contas excluídas, pessoas removidas recuperadas pelo relatório detalhado, limite silencioso de página, plano
+FREE com relatório de 31 dias, conferência por pessoa, jobs interrompidos, bloqueio de endereços fora do Clockify) e por
+CSV (inglês e português). `node --test test/clockifyApi.test.js` testa o cliente HTTP (paginação, retentativas,
+tempo-limite, regiões e subdomínios) sem rede.

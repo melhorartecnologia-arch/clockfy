@@ -12,6 +12,14 @@ const ENTITIES = [
   ['timeOff', 'Folgas'], ['approvals', 'Aprovações'], ['scheduling', 'Agenda'], ['invoices', 'Faturas'], ['webhooks', 'Webhooks'],
 ];
 const STATUS = { PENDING: ['Na fila', ''], RUNNING: ['Executando', 'primary'], DONE: ['Concluído', 'success'], FAILED: ['Falhou', 'danger'], CANCELLED: ['Cancelado', 'warning'] };
+// Clockify servers: global cloud, data regions and subdomain workspaces (https://empresa.clockify.me)
+const SERVERS = [
+  ['auto', 'Detectar automaticamente (recomendado)'], ['global', 'Global – app.clockify.me'], ['euc1', 'União Europeia (Alemanha)'],
+  ['use2', 'Estados Unidos'], ['euw2', 'Reino Unido'], ['apse2', 'Austrália'], ['custom', 'Subdomínio próprio (empresa.clockify.me)'],
+];
+const REGION_CODES = ['euc1', 'use2', 'euw2', 'apse2'];
+const hours = (s) => `${(Number(s || 0) / 3600).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} h`;
+const num = (n) => Number(n || 0).toLocaleString('pt-BR');
 
 export default function Import() {
   const { workspace, isAdmin, toast } = useStore();
@@ -60,6 +68,7 @@ function ApiWizard({ onBack, onStarted }) {
   const { workspace, toast } = useStore();
   const wsId = workspace?.id;
   const [apiKey, setApiKey] = useState('');
+  const [server, setServer] = useState('auto');
   const [baseUrl, setBaseUrl] = useState('');
   const [remote, setRemote] = useState(null); // list of clockify workspaces
   const [sourceWorkspaceId, setSourceWorkspaceId] = useState('');
@@ -67,29 +76,42 @@ function ApiWizard({ onBack, onStarted }) {
   const [entities, setEntities] = useState(ENTITIES.map(([k]) => k));
   const [since, setSince] = useState('');
   const [dryRun, setDryRun] = useState(false);
+  const [reconcile, setReconcile] = useState(true);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(null);
 
+  // where the key belongs: nothing (auto-detect), a data region, or the subdomain address
+  const serverParams = () => (server === 'custom' ? { baseUrl: baseUrl.trim() || undefined } : server === 'auto' ? {} : { region: server });
+
   async function connect() {
     if (!apiKey.trim()) { setError('Informe a chave de API'); return; }
-    setBusy(true); setError(null);
+    if (server === 'custom' && !baseUrl.trim()) { setError('Informe o endereço do seu Clockify (ex.: https://empresa.clockify.me)'); return; }
+    setBusy(true); setError(null); setRemote(null);
     try {
-      const list = await api.post(`${ws(wsId)}/import/clockify/workspaces`, { apiKey: apiKey.trim(), baseUrl: baseUrl.trim() || undefined });
-      setRemote(list); if (list[0]) setSourceWorkspaceId(list[0].id);
+      const list = await api.post(`${ws(wsId)}/import/clockify/workspaces`, { apiKey: apiKey.trim(), ...serverParams() });
+      setRemote(list);
+      const preferred = list.find((w) => w.id === list[0]?.apiUser?.activeWorkspace) || list[0];
+      setSourceWorkspaceId(preferred?.id || '');
       if (!list.length) setError('Nenhum workspace encontrado para esta chave.');
     } catch (e) { setError(e.status === 404 ? 'O módulo de importação não está disponível neste servidor.' : errorMessage(e)); } finally { setBusy(false); }
   }
+  const selectedWs = remote?.find((w) => w.id === sourceWorkspaceId);
   async function start() {
     setBusy(true); setError(null);
     try {
-      const r = await api.post(`${ws(wsId)}/import/clockify`, { apiKey: apiKey.trim(), baseUrl: baseUrl.trim() || undefined, sourceWorkspaceId: sourceWorkspaceId || undefined, mode, entities, since: since ? `${since}T00:00:00Z` : undefined, dryRun });
+      // with auto-detection, a workspace found in a data region is imported from that region directly
+      const params = server === 'auto' && REGION_CODES.includes(selectedWs?.region) ? { region: selectedWs.region } : serverParams();
+      const r = await api.post(`${ws(wsId)}/import/clockify`, {
+        apiKey: apiKey.trim(), ...params, sourceWorkspaceId: sourceWorkspaceId || undefined, mode, entities, since: since ? `${since}T00:00:00Z` : undefined, dryRun, reconcile,
+      });
       toast(dryRun ? 'Simulação iniciada' : 'Importação iniciada', 'success');
       onStarted(r.jobId || r.id);
     } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
   }
   const toggle = (k) => setEntities((l) => (l.includes(k) ? l.filter((x) => x !== k) : [...l, k]));
-  const selectedWs = remote?.find((w) => w.id === sourceWorkspaceId);
+  const apiUser = remote?.[0]?.apiUser;
+  const endpoint = remote?.[0]?.apiEndpoint;
 
   return (
     <div>
@@ -97,18 +119,38 @@ function ApiWizard({ onBack, onStarted }) {
       <div className="grid cols-2" style={{ alignItems: 'start' }}>
         <div>
           <h3>1. Conectar ao Clockify</h3>
-          <div className="field"><label>Chave de API do Clockify</label><input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Cole aqui a chave gerada no Clockify" autoFocus /></div>
-          <div className="field"><label>URL base da API (opcional)</label><input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.clockify.me/api/v1" /><div className="small muted mt">Deixe em branco para usar a nuvem do Clockify. Para instalações com subdomínio/região use a URL indicada pelo Clockify (ex.: https://developer.clockify.me).</div></div>
-          <button className="btn secondary" disabled={busy} onClick={connect}>{busy && !remote ? 'Conectando…' : 'Conectar e listar workspaces'}</button>
-          <div className="alert info mt small">
-            <b>Onde gerar a chave:</b> no Clockify, clique no seu avatar → <b>Profile settings</b> → seção <b>API</b> → <b>Generate</b>. A chave dá acesso a todos os workspaces da sua conta; use uma conta com permissão de administrador no workspace de origem para importar taxas, membros e registros de todos os usuários.
+          <div className="alert info small">
+            <b>Como gerar a chave de API no Clockify:</b>
+            <ol style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+              <li>Entre no Clockify com a conta do <b>proprietário</b> ou de um <b>administrador</b> do workspace (só eles enxergam os dados de toda a equipe).</li>
+              <li>Clique na sua foto (canto superior direito) → <b>Preferências</b> → aba <b>Avançado</b>.</li>
+              <li>Em <b>Gerenciar chaves de API</b>, clique em <b>Gerar nova</b> e copie a chave — ela só aparece uma vez.</li>
+            </ol>
+            <div className="mt">A chave fica só na memória durante a importação: não é gravada no banco nem aparece nos registros.</div>
           </div>
+          <div className="field"><label>Chave de API do Clockify</label><input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Cole aqui a chave gerada no Clockify" autoComplete="off" autoFocus /></div>
+          <div className="field"><label>Servidor do Clockify</label>
+            <select value={server} onChange={(e) => { setServer(e.target.value); setRemote(null); }}>{SERVERS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+            <div className="small muted mt">Na dúvida deixe em “Detectar automaticamente”: a conta e o workspace são procurados no servidor global e nas regiões de dados (UE, EUA, Reino Unido, Austrália).</div>
+          </div>
+          {server === 'custom' && (
+            <div className="field"><label>Endereço do seu Clockify</label><input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://empresa.clockify.me" />
+              <div className="small muted mt">Workspaces com subdomínio exigem uma chave gerada dentro do próprio subdomínio.</div>
+            </div>
+          )}
+          <button className="btn secondary" disabled={busy} onClick={connect}>{busy && !remote ? 'Conectando…' : remote ? 'Reconectar' : 'Conectar e listar workspaces'}</button>
+          {apiUser && (
+            <div className="alert success small mt">
+              Conectado como <b>{apiUser.name}</b> &lt;{apiUser.email}&gt;{endpoint?.label ? <> · servidor <b>{endpoint.label}</b></> : null}
+            </div>
+          )}
         </div>
         <div>
           <h3>2. O que importar</h3>
           {!remote ? <div className="light small">Conecte-se primeiro para escolher o workspace de origem.</div> : (
             <>
-              <div className="field"><label>Workspace de origem</label><select value={sourceWorkspaceId} onChange={(e) => setSourceWorkspaceId(e.target.value)}>{remote.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}</select></div>
+              <div className="field"><label>Workspace de origem</label><select value={sourceWorkspaceId} onChange={(e) => setSourceWorkspaceId(e.target.value)}>{remote.map((w) => <option key={w.id} value={w.id}>{w.name}{w.regionLabel && w.region !== 'global' ? ` (${w.regionLabel})` : ''}</option>)}</select></div>
+              {selectedWs && <AccessNotice ws={selectedWs} />}
               <div className="field"><label>Destino</label>
                 <label className="checkbox"><input type="radio" checked={mode === 'INTO_CURRENT'} onChange={() => setMode('INTO_CURRENT')} /> Importar para o workspace atual (<b>{workspace.name}</b>)</label>
                 <label className="checkbox mt"><input type="radio" checked={mode === 'NEW_WORKSPACE'} onChange={() => setMode('NEW_WORKSPACE')} /> Criar um novo workspace com o mesmo ID do Clockify ({selectedWs?.id})</label>
@@ -116,8 +158,12 @@ function ApiWizard({ onBack, onStarted }) {
               </div>
               <div className="field"><label>Entidades</label><div className="row gap wrap">{ENTITIES.map(([k, label]) => <label key={k} className="checkbox"><input type="checkbox" checked={entities.includes(k)} onChange={() => toggle(k)} />{label}</label>)}</div></div>
               <div className="grid cols-2">
-                <div className="field"><label>Importar registros desde (opcional)</label><input type="date" value={since} onChange={(e) => setSince(e.target.value)} /><div className="small muted mt">Para sincronização incremental: apenas registros iniciados a partir desta data. Entidades já existentes (mesmo ID) são atualizadas, não duplicadas.</div></div>
-                <div className="field"><label>Simulação</label><label className="checkbox"><input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} /> Apenas simular (não grava nada)</label><div className="small muted mt">Gera o relatório de contagens e possíveis erros sem alterar o workspace.</div></div>
+                <div className="field"><label>Importar registros desde (opcional)</label><input type="date" value={since} onChange={(e) => setSince(e.target.value)} /><div className="small muted mt">Deixe em branco para trazer todo o histórico. Para sincronizar de novo depois, informe a data da última importação: registros já existentes (mesmo ID) são atualizados, não duplicados.</div></div>
+                <div className="field"><label>Opções</label>
+                  <label className="checkbox"><input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} /> Apenas simular (não grava nada)</label>
+                  <label className="checkbox mt"><input type="checkbox" checked={reconcile} onChange={(e) => setReconcile(e.target.checked)} /> Conferir com o relatório detalhado do Clockify (recomendado)</label>
+                  <div className="small muted mt">A conferência compara, pessoa por pessoa, os registros e as horas do Clockify com o que foi importado, e recupera o histórico de quem já saiu do workspace.</div>
+                </div>
               </div>
             </>
           )}
@@ -125,11 +171,20 @@ function ApiWizard({ onBack, onStarted }) {
       </div>
       <div className="row mt">
         <button className="btn ghost" onClick={onBack}>← Voltar</button>
-        <button className="btn right" disabled={busy || !remote || !sourceWorkspaceId || !entities.length} onClick={() => (dryRun ? start() : setConfirm({ title: 'Iniciar importação', message: `Importar ${entities.length} tipo(s) de entidade do workspace “${selectedWs?.name}” ${mode === 'INTO_CURRENT' ? `para “${workspace.name}”` : 'para um novo workspace'}? A operação roda em segundo plano e pode levar alguns minutos.`, confirmLabel: 'Importar', onConfirm: start }))}>{dryRun ? 'Simular importação' : 'Iniciar importação'}</button>
+        <button className="btn right" disabled={busy || !remote || !sourceWorkspaceId || !entities.length} onClick={() => (dryRun ? start() : setConfirm({ title: 'Iniciar importação', message: `Importar ${entities.length} tipo(s) de dado do workspace “${selectedWs?.name}” ${mode === 'INTO_CURRENT' ? `para “${workspace.name}”` : 'para um novo workspace'}? A operação roda em segundo plano e pode levar de minutos a algumas horas em workspaces grandes. Pode fechar esta página: o andamento fica no histórico abaixo.`, confirmLabel: 'Importar', onConfirm: start }))}>{dryRun ? 'Simular importação' : 'Iniciar importação'}</button>
       </div>
       {confirm && <Confirm {...confirm} onClose={() => setConfirm(null)} />}
     </div>
   );
+}
+
+// Whether the key owner administers the chosen Clockify workspace (only admins see everybody's data).
+function AccessNotice({ ws: w }) {
+  if (w.access === 'ADMIN') return <div className="alert success small">Você é administrador deste workspace no Clockify: os dados de toda a equipe serão importados.</div>;
+  if (w.access === 'NOT_ADMIN') {
+    return <div className="alert warning small"><b>Você não é administrador deste workspace no Clockify.</b> Só os seus próprios registros seriam importados. Para migrar a equipe inteira, use a chave de API do proprietário ou de um administrador.</div>;
+  }
+  return <div className="alert info small">Não foi possível confirmar se você é administrador deste workspace no Clockify. Para migrar os dados de toda a equipe, a chave deve ser do proprietário ou de um administrador.</div>;
 }
 
 function CsvWizard({ onBack, onDone }) {
@@ -230,11 +285,16 @@ function JobMonitor({ jobId, onFinished, onNew }) {
         {!active && <button className="btn secondary sm right" onClick={onNew}>Nova importação</button>}
       </div>
       <div className="row gap"><span className="bold" style={{ minWidth: 160 }}>{p.stage ? stageLabel(p.stage) : (active ? 'Aguardando…' : '')}</span><div className="progress grow" style={{ height: 12 }}><div className={job.status === 'FAILED' ? 'over' : ''} style={{ width: `${pct ?? (active ? 15 : 0)}%`, transition: 'width .4s' }} /></div><span className="mono small" style={{ minWidth: 90, textAlign: 'right' }}>{p.total ? `${p.current} / ${p.total}` : pct != null ? `${pct}%` : ''}</span></div>
+      {p.sourceWorkspaceName && <div className="small muted mt">Origem: <b>{p.sourceWorkspaceName}</b>{p.sourceUser?.email ? ` · chave de ${p.sourceUser.email}` : ''}{p.sourceEndpoint?.label ? ` · servidor ${p.sourceEndpoint.label}` : ''}</div>}
       {job.error && <Alert type="error">{job.error}</Alert>}
+      {p.warnings?.length > 0 && (
+        <div className="alert warning mt small"><b>Atenção</b><ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>{p.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></div>
+      )}
+      {p.reconciliation && <Reconciliation rec={p.reconciliation} dryRun={!!job.options?.dryRun} />}
       {p.stages && Object.keys(p.stages).length > 0 && (
         <table className="table compact mt">
           <thead><tr><th>Etapa</th><th>Status</th><th className="num">Lidos</th><th className="num">Criados</th><th className="num">Atualizados</th><th className="num">Ignorados</th><th className="num">Erros</th></tr></thead>
-          <tbody>{Object.entries(p.stages).map(([k, st]) => { const d = p.details?.[k] || {}; const sl = { DONE: ['Concluída', 'success'], FAILED: ['Falhou', 'danger'], SKIPPED: ['Ignorada', ''], RUNNING: ['Executando', 'primary'] }[st.status] || [st.status, '']; return (
+          <tbody>{orderedStages(p.stages).map(([k, st]) => { const d = stageDetails(p.details, k); const sl = { DONE: ['Concluída', 'success'], FAILED: ['Falhou', 'danger'], SKIPPED: ['Ignorada', ''], RUNNING: ['Executando', 'primary'] }[st.status] || [st.status, '']; return (
             <tr key={k}><td>{stageLabel(k)}</td><td><span className={`badge ${sl[1]}`}>{sl[0]}</span>{st.error && <span className="small muted ml" title={st.error}>{String(st.error).slice(0, 80)}</span>}</td><td className="num mono">{d.fetched ?? '—'}</td><td className="num mono">{d.created ?? '—'}</td><td className="num mono">{d.updated ?? '—'}</td><td className="num mono">{d.skipped ?? '—'}</td><td className="num mono" style={d.errors ? { color: 'var(--danger)' } : undefined}>{d.errors ?? '—'}</td></tr>
           ); })}</tbody>
         </table>
@@ -248,6 +308,67 @@ function JobMonitor({ jobId, onFinished, onNew }) {
       {confirm && <Confirm {...confirm} onClose={() => setConfirm(null)} />}
     </div>
   );
+}
+
+// Clockify (detailed report) × Clockfy, person by person.
+function Reconciliation({ rec, dryRun }) {
+  if (rec.error) return <div className="alert warning mt small"><b>Conferência com o relatório detalhado indisponível:</b> {rec.error}</div>;
+  const ok = !dryRun && rec.missing === 0 && rec.complete !== false;
+  return (
+    <div className="card mt">
+      <div className="card-head">
+        <h3 style={{ margin: 0 }}>Conferência com o Clockify</h3>
+        <span className="small muted ml">relatório detalhado desde {String(rec.from || '').slice(0, 10).split('-').reverse().join('/')}</span>
+        <span className={`badge right ${dryRun ? '' : ok ? 'success' : 'warning'}`}>{dryRun ? 'Simulação' : ok ? 'Tudo conferido' : rec.missing ? `${num(rec.missing)} registro(s) faltando` : 'Conferência incompleta'}</span>
+      </div>
+      <div className="card-body">
+        <div className="grid cols-3">
+          <div className="card stat"><div className="label">No Clockify</div><div className="value">{num(rec.clockify?.entries)}</div><div className="small muted">{hours(rec.clockify?.seconds)}</div></div>
+          <div className="card stat"><div className="label">{dryRun ? 'No Clockfy (simulação)' : 'No Clockfy'}</div><div className="value">{rec.local ? num(rec.local.entries) : '—'}</div><div className="small muted">{rec.local ? hours(rec.local.seconds) : 'nada é gravado na simulação'}</div></div>
+          <div className="card stat"><div className="label">Recuperados pelo relatório</div><div className="value">{num(rec.recovered)}</div><div className="small muted">registros que a listagem por pessoa não trouxe</div></div>
+        </div>
+        {rec.removedUsers?.length > 0 && <div className="small muted mt">Pessoas fora do workspace no Clockify, incluídas como membros inativos: {rec.removedUsers.join(', ')}</div>}
+        {rec.users?.length > 0 && (
+          <div style={{ maxHeight: 320, overflowY: 'auto' }} className="mt">
+            <table className="table compact">
+              <thead><tr><th>Pessoa</th><th>E-mail</th><th className="num">Clockify</th><th className="num">Horas</th><th className="num">Clockfy</th><th className="num">Horas</th><th /></tr></thead>
+              <tbody>{rec.users.map((u) => {
+                const good = !u.local || (u.local.entries === u.clockify.entries && Math.abs(u.local.seconds - u.clockify.seconds) < 60);
+                return (
+                  <tr key={u.userId}>
+                    <td>{u.name || u.userId}</td><td className="small muted">{u.email || 'sem e-mail'}</td>
+                    <td className="num mono">{num(u.clockify.entries)}</td><td className="num mono">{hours(u.clockify.seconds)}</td>
+                    <td className="num mono">{u.local ? num(u.local.entries) : '—'}</td><td className="num mono">{u.local ? hours(u.local.seconds) : '—'}</td>
+                    <td>{u.local && <span className={`badge ${good ? 'success' : 'warning'}`}>{good ? 'OK' : 'Diferença'}</span>}</td>
+                  </tr>
+                );
+              })}</tbody>
+            </table>
+          </div>
+        )}
+        {rec.missingSamples?.length > 0 && (
+          <div className="mt"><div className="small bold">Exemplos de registros não importados (veja os erros no log):</div>
+            <table className="table compact"><tbody>{rec.missingSamples.slice(0, 10).map((m) => <tr key={m.id}><td className="mono small">{m.id}</td><td className="small">{m.userName}</td><td className="small">{m.start ? new Date(m.start).toLocaleString('pt-BR') : ''}</td><td className="small truncate">{m.description}</td></tr>)}</tbody></table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// JSONB does not keep key order: show the stages in execution order.
+const STAGE_ORDER = ENTITIES.map(([k]) => k);
+function orderedStages(stages) {
+  return Object.entries(stages || {}).sort(([a], [b]) => (STAGE_ORDER.indexOf(a) + 1 || 99) - (STAGE_ORDER.indexOf(b) + 1 || 99));
+}
+
+// Some stages count their parts separately (time off: policies, balances and requests).
+const STAGE_PARTS = { timeOff: ['timeOffPolicies', 'timeOffBalances', 'timeOffRequests'] };
+function stageDetails(details = {}, k) {
+  if (details[k] || !STAGE_PARTS[k]) return details[k] || {};
+  const parts = STAGE_PARTS[k].map((x) => details[x]).filter(Boolean);
+  if (!parts.length) return {};
+  return parts.reduce((acc, d) => Object.fromEntries(['fetched', 'created', 'updated', 'skipped', 'errors'].map((f) => [f, (acc[f] || 0) + (d[f] || 0)])), {});
 }
 
 function stageLabel(k) {

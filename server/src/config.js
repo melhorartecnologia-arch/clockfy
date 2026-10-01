@@ -24,6 +24,8 @@ export const config = {
   schedulerEnabled: env.SCHEDULER_ENABLED !== 'false',
   webhookTimeoutMs: Number(env.WEBHOOK_TIMEOUT_MS || 10000),
   logSql: env.LOG_SQL === 'true',
+  // Extra hosts (host or host:port) the Clockify importer may call besides https://*.clockify.me – e.g. a mirror.
+  clockifyImportAllowedHosts: String(env.CLOCKIFY_IMPORT_ALLOWED_HOSTS || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean),
 };
 
 export default config;

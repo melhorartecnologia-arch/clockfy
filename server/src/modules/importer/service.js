@@ -2,6 +2,7 @@
 // Reads the official Clockify API (see clockifyApi.js) and writes straight to the database preserving the
 // original Clockify identifiers, so third-party integrations keep working after switching the base URL.
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { hostname } from 'node:os';
 import { one, rows, query, transaction } from '../../lib/db.js';
 import { newId, isValidId, randomToken } from '../../lib/ids.js';
 import { audit } from '../../lib/audit.js';
@@ -12,15 +13,23 @@ import { DEFAULT_USER_SETTINGS, DEFAULT_WORKSPACE_SETTINGS } from '../../lib/set
 import { badRequest, forbidden, notFound } from '../../lib/errors.js';
 import { createWorkspace } from '../workspaces/service.js';
 import { normalizeValue } from '../customFields/index.js';
-import { ClockifyClient, ClockifyApiError, ImportCancelledError } from './clockifyApi.js';
+import { config } from '../../config.js';
+import { ClockifyClient, ClockifyApiError, ImportCancelledError, REGIONS, regionEndpoints, normalizeBaseUrl } from './clockifyApi.js';
 
 export const ENTITIES = ['workspace', 'users', 'userGroups', 'clients', 'projects', 'tasks', 'tags', 'customFields', 'timeEntries', 'expenses', 'holidays', 'timeOff', 'approvals', 'scheduling', 'invoices', 'webhooks'];
 export const MODES = ['INTO_CURRENT', 'NEW_WORKSPACE'];
+export const SOURCE_REGIONS = ['auto', 'global', ...Object.keys(REGIONS)];
 export const DEFAULT_SINCE = '2010-01-01';
 export const MAX_LOG_LINES = 500;
 
 const APPROVAL_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'WITHDRAWN_SUBMISSION', 'WITHDRAWN_APPROVAL'];
+const ADMIN_ROLES = new Set(['OWNER', 'WORKSPACE_ADMIN']);
+// Clockify leaves these accounts out of the users listing unless asked for (kiosk-only "limited" users, deleted accounts)
+const EXTRA_ACCOUNT_STATUSES = ['LIMITED', 'DELETED', 'LIMITED_DELETED'];
+const MAX_TIME_ENTRY_PAGE = 1000; // documented maximum of GET /user/{id}/time-entries
 const DAY_MS = 86400000;
+const HEARTBEAT_MS = 20000;
+const STALE_JOB_MS = 3 * 60000;
 
 // In-memory state of running jobs (the API key is never persisted).
 const runtime = new Map(); // jobId -> { cancelled, promise }
@@ -87,25 +96,111 @@ export async function waitForRunningJobs() {
   await Promise.allSettled([...runtime.values()].map((s) => s.promise));
 }
 
-// Lists the Clockify workspaces an API key has access to (used by the UI to pick the source workspace).
-export async function listWorkspacesForKey({ apiKey, baseUrl, fetchImpl } = {}) {
+function isProcessAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; }
+}
+
+// A job whose process died (server restarted, crash, CLI interrupted) would stay RUNNING forever. Running jobs write a
+// heartbeat every few seconds and record which process runs them, so dead ones are recognised and marked FAILED.
+function isJobDead(job) {
+  if (runtime.has(job.id)) return false;
+  const runner = job.progress?.runner;
+  if (runner && runner.host === hostname() && runner.pid && runner.pid !== process.pid) return !isProcessAlive(runner.pid);
+  const beat = Date.parse(job.progress?.heartbeatAt || '') || new Date(job.started_at || job.created_at).getTime() || 0;
+  return Date.now() - beat > STALE_JOB_MS;
+}
+
+export async function recoverInterruptedJobs({ workspaceId } = {}) {
+  const list = await rows(`SELECT id, progress, started_at, created_at FROM import_jobs WHERE status IN ('PENDING','RUNNING')${workspaceId ? ' AND workspace_id = $1' : ''}`, workspaceId ? [workspaceId] : []);
+  let recovered = 0;
+  for (const job of list) {
+    if (!isJobDead(job)) continue;
+    const line = `${new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')} Importação interrompida (o processo que a executava foi encerrado, p.ex. reinício do servidor). Execute novamente: a importação é idempotente e não duplica registros.`;
+    const r = await query(
+      `UPDATE import_jobs SET status = 'FAILED', error = $2, finished_at = now(), progress = COALESCE(progress, '{}'::jsonb) || '{"stage":"FAILED","interrupted":true}'::jsonb, log = COALESCE(log, '[]'::jsonb) || $3::jsonb
+       WHERE id = $1 AND status IN ('PENDING','RUNNING')`,
+      [job.id, 'Interrupted: the process running the import stopped (e.g. server restart). Run it again – imports are idempotent.', JSON.stringify([line])],
+    );
+    recovered += r.rowCount || 0;
+  }
+  return recovered;
+}
+
+// Ids of imports running in this workspace – in this process or, according to their heartbeat, in another one (CLI).
+export async function activeJobsOfWorkspace(workspaceId) {
+  await recoverInterruptedJobs({ workspaceId });
+  const ids = new Set(runningJobsOfWorkspace(workspaceId));
+  for (const r of await rows(`SELECT id FROM import_jobs WHERE workspace_id = $1 AND status = 'RUNNING'`, [workspaceId])) ids.add(r.id);
+  return [...ids];
+}
+
+// Lists the Clockify workspaces an API key has access to (used by the UI to pick the source workspace), with the data
+// region that stores each one and whether the key owner administers it.
+export async function listWorkspacesForKey({ apiKey, baseUrl, region, fetchImpl } = {}) {
   if (!apiKey) throw badRequest('apiKey is required', 400);
-  const client = new ClockifyClient({ apiKey, baseUrl, fetchImpl, maxRetries: 2 });
+  const client = new ClockifyClient({ apiKey, baseUrl, region, fetchImpl, maxRetries: 2 });
   let me;
-  try { me = await client.me(); } catch (err) { throw mapAuthError(err); }
-  const list = await client.workspaces();
-  return {
-    user: { id: me.id, email: me.email, name: me.name, activeWorkspace: me.activeWorkspace || null, defaultWorkspace: me.defaultWorkspace || null },
-    workspaces: (Array.isArray(list) ? list : []).map((w) => ({
+  try { me = await client.locateAccount(); } catch (err) { throw mapAuthError(err); }
+  const found = new Map();
+  const collect = (list, endpoint) => { for (const w of arr(list)) if (w?.id && !found.has(w.id)) found.set(w.id, { w, endpoint }); };
+  try { collect(await client.workspaces(), { ...client.endpoint, baseUrl: client.baseUrl }); } catch (err) { throw mapAuthError(err); }
+  if (!client.explicitEndpoint) {
+    // workspaces stored in another data region may only be listed by that region's servers
+    for (const r of Object.keys(REGIONS)) {
+      const e = regionEndpoints(r);
+      if (e.baseUrl === client.baseUrl) continue;
+      try { collect(await client.request('GET', '/workspaces', { base: e.baseUrl, retries: 0, timeoutMs: 15000 }), { region: r, label: REGIONS[r], baseUrl: e.baseUrl }); } catch { /* region not used by this account */ }
+    }
+  }
+  const workspaces = [];
+  for (const { w, endpoint } of found.values()) {
+    workspaces.push({
       id: w.id, name: w.name, imageUrl: w.imageUrl || '', memberships: (w.memberships || []).length,
       hourlyRate: w.hourlyRate || null, currencies: (w.currencies || []).map((c) => c.code), featureSubscriptionType: w.featureSubscriptionType?.addonSubscriptionPlan || w.featureSubscriptionType || null,
-    })),
+      region: endpoint.region, regionLabel: endpoint.label, baseUrl: endpoint.baseUrl,
+      access: await sourceAccess(client, w.id, me, endpoint.baseUrl),
+    });
+  }
+  return {
+    user: { id: me.id, email: me.email, name: me.name, activeWorkspace: me.activeWorkspace || null, defaultWorkspace: me.defaultWorkspace || null },
+    endpoint: { baseUrl: client.baseUrl, reportsUrl: client.reportsUrl, region: client.endpoint.region, label: client.endpoint.label },
+    workspaces,
   };
 }
 
+// Whether the key owner administers a Clockify workspace: 'ADMIN' | 'NOT_ADMIN' | 'UNKNOWN'.
+async function sourceAccess(client, workspaceId, me, base) {
+  try {
+    const list = arr(await client.request('GET', `/workspaces/${workspaceId}/users`, { base, query: { email: me.email || undefined, 'include-roles': true, status: 'ALL', page: 1, 'page-size': 50 }, retries: 1, timeoutMs: 20000 }));
+    return accessOf(list.find((u) => u?.id === me.id));
+  } catch (err) {
+    return err instanceof ClockifyApiError && err.status === 403 ? 'NOT_ADMIN' : 'UNKNOWN';
+  }
+}
+
+function accessOf(user) {
+  if (!user || !Array.isArray(user.roles)) return 'UNKNOWN';
+  return normalizeRoles(user).some((r) => ADMIN_ROLES.has(r.role)) ? 'ADMIN' : 'NOT_ADMIN';
+}
+
+// The server calls these URLs with the person's API key, so the web API only accepts Clockify addresses (no requests
+// to internal hosts such as cloud metadata endpoints). Mirrors can be allowed with CLOCKIFY_IMPORT_ALLOWED_HOSTS.
+export function assertAllowedSourceUrl(url, field = 'baseUrl') {
+  if (url === undefined || url === null || String(url).trim() === '') return;
+  let parsed;
+  try { parsed = new URL(/^https?:\/\//i.test(String(url).trim()) ? String(url).trim() : `https://${String(url).trim()}`); } catch { throw badRequest(`${field} is not a valid URL`, 400); }
+  const host = parsed.hostname.toLowerCase();
+  const allowed = config.clockifyImportAllowedHosts;
+  if (allowed.includes(host) || (parsed.port && allowed.includes(`${host}:${parsed.port}`))) return;
+  if (parsed.protocol === 'https:' && (host === 'clockify.me' || host.endsWith('.clockify.me'))) return;
+  throw badRequest(`${field} must be a Clockify address (https://….clockify.me)`, 400);
+}
+
 function mapAuthError(err) {
-  if (err instanceof ClockifyApiError && (err.status === 401 || err.status === 403)) return badRequest('Clockify rejected the API key (401/403). Generate a new key in Clockify > Profile settings > API.', 401);
-  if (err instanceof ClockifyApiError) return badRequest(`Clockify API error: ${err.message}`, 502);
+  if (err instanceof ClockifyApiError && (err.status === 401 || err.status === 403)) {
+    return badRequest('O Clockify recusou a chave de API (401/403). Gere uma nova chave no Clockify: foto do perfil → Preferências → Avançado → Gerenciar chaves de API → Gerar nova. Workspaces em subdomínio (empresa.clockify.me) exigem uma chave gerada dentro do subdomínio e a URL https://empresa.clockify.me no campo de servidor.', 401);
+  }
+  if (err instanceof ClockifyApiError) return badRequest(`Erro na API do Clockify: ${err.message}`, 502);
   return err;
 }
 
@@ -136,9 +231,16 @@ export function normalizeOptions(options = {}) {
     out.since = d.toISOString();
   }
   out.dryRun = !!out.dryRun;
+  if (out.reconcile !== undefined) out.reconcile = out.reconcile !== false && out.reconcile !== 'false';
+  if (out.region !== undefined && out.region !== null && out.region !== '') {
+    const r = String(out.region).trim().toLowerCase();
+    if (!SOURCE_REGIONS.includes(r)) throw badRequest(`region must be one of: ${SOURCE_REGIONS.join(', ')}`, 400);
+    out.region = r === 'auto' ? undefined : r;
+  } else delete out.region;
+  if (!out.baseUrl) delete out.baseUrl;
   if (out.pageSize !== undefined && out.pageSize !== null) {
     const n = parseInt(out.pageSize, 10);
-    if (Number.isNaN(n) || n < 1 || n > 5000) throw badRequest('pageSize must be between 1 and 5000', 400);
+    if (Number.isNaN(n) || n < 1 || n > MAX_TIME_ENTRY_PAGE) throw badRequest(`pageSize must be between 1 and ${MAX_TIME_ENTRY_PAGE}`, 400);
     out.pageSize = n;
   }
   if (out.ratePerSecond !== undefined && out.ratePerSecond !== null) {
@@ -148,7 +250,10 @@ export function normalizeOptions(options = {}) {
     out.ratePerSecond = n;
   }
   if (out.sourceWorkspaceId && !isValidId(out.sourceWorkspaceId)) throw badRequest('sourceWorkspaceId must be a 24-char hex id', 400);
-  if (out.baseUrl && !/^https?:\/\//.test(String(out.baseUrl))) throw badRequest('baseUrl must start with http:// or https://', 400);
+  if (out.baseUrl) {
+    out.baseUrl = normalizeBaseUrl(out.baseUrl);
+    try { new URL(out.baseUrl); } catch { throw badRequest('baseUrl is not a valid URL', 400); }
+  }
   return out;
 }
 
@@ -164,7 +269,10 @@ class ImportRun {
     this.onLog = onLog || (() => {});
     this.onProgress = onProgress || (() => {});
     this.logLines = Array.isArray(job.log) ? [...job.log] : [];
-    this.progress = { ...(job.progress || {}), stage: 'STARTING', current: 0, total: null, counts: {}, details: {}, stages: {}, cancelRequested: false };
+    this.progress = {
+      ...(job.progress || {}), stage: 'STARTING', current: 0, total: null, counts: {}, details: {}, stages: {}, warnings: [], cancelRequested: false,
+      runner: { pid: process.pid, host: hostname() },
+    };
     this.dryRun = !!this.options.dryRun;
     this.mode = this.options.mode;
     this.since = new Date(this.options.since || DEFAULT_SINCE);
@@ -179,10 +287,14 @@ class ImportRun {
     this.warned = new Set();
     this.ratesCache = new Map();
     this.pendingProjectManagers = [];
+    this.pendingTeamManagers = [];
     this.pendingUserCustomFields = [];
+    this.rejectedUsers = new Set();   // clockify user ids outside the users listing that could not be adopted
+    this.adoptedUsers = [];           // people outside the users listing kept as inactive members (labels)
+    this.foreign = new Map();         // table -> { count, sampleId } of records whose id belongs to another local workspace
     this.sourceProjects = null;
     this.client = new ClockifyClient({
-      apiKey, baseUrl: this.options.baseUrl, reportsUrl: this.options.reportsUrl, fetchImpl, ratePerSecond: this.options.ratePerSecond || 8,
+      apiKey, baseUrl: this.options.baseUrl, reportsUrl: this.options.reportsUrl, region: this.options.region, fetchImpl, ratePerSecond: this.options.ratePerSecond || 8,
       log: (m) => this.log(m), shouldStop: () => this.state.cancelled,
     });
   }
@@ -201,6 +313,22 @@ class ImportRun {
     if (this.warned.has(key)) return;
     this.warned.add(key);
     this.log(message);
+  }
+
+  // Something the person running the import must know (shown above the log in the UI and at the end of the CLI).
+  warn(message) {
+    this.log(`ATENÇÃO: ${message}`);
+    const list = this.progress.warnings || (this.progress.warnings = []);
+    if (!list.includes(message) && list.length < 30) list.push(message);
+  }
+
+  startHeartbeat() {
+    this.heartbeat = setInterval(() => this.runOutside(() => this.flush(true).catch(() => {})), HEARTBEAT_MS);
+    this.heartbeat.unref?.();
+  }
+
+  stopHeartbeat() {
+    if (this.heartbeat) { clearInterval(this.heartbeat); this.heartbeat = null; }
   }
 
   count(entity, result) {
@@ -241,6 +369,7 @@ class ImportRun {
   async flush(force = false) {
     if (!force && Date.now() - this.lastFlush < 750) return;
     this.lastFlush = Date.now();
+    this.progress.heartbeatAt = new Date().toISOString();
     try { this.onProgress(this.progress); } catch { /* ignore */ }
     if (!this.job.id) return;
     await query('UPDATE import_jobs SET progress = $2, log = $3 WHERE id = $1', [this.job.id, JSON.stringify(this.progress), JSON.stringify(this.logLines)]);
@@ -248,7 +377,9 @@ class ImportRun {
 
   async setStatus(status, { error, started, finished } = {}) {
     if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
+    if (finished) this.stopHeartbeat();
     this.lastFlush = Date.now();
+    this.progress.heartbeatAt = new Date().toISOString();
     try { this.onProgress(this.progress); } catch { /* ignore */ }
     if (!this.job.id) {
       // not persisted (e.g. CLI dry run of a workspace that does not exist yet): keep the state in memory
@@ -323,10 +454,14 @@ class ImportRun {
 
   // Idempotent upsert preserving the id. Returns 'created' | 'updated' | 'skipped'.
   async upsert(table, row, updateCols, { conflict = 'id', scope = 'workspace_id', ignore = false } = {}) {
+    const scoped = !ignore && scope && row[scope] !== undefined;
     if (this.dryRun) {
       const cols = conflict.split(',').map((c) => c.trim());
-      const existing = await one(`SELECT 1 FROM ${table} WHERE ${cols.map((c, i) => `"${c}" = $${i + 1}`).join(' AND ')}`, cols.map((c) => toParam(row[c])));
-      return existing ? (ignore ? 'skipped' : 'updated') : 'created';
+      const existing = await one(`SELECT ${scoped ? `"${scope}" AS scope_value` : '1 AS x'} FROM ${table} WHERE ${cols.map((c, i) => `"${c}" = $${i + 1}`).join(' AND ')}`, cols.map((c) => toParam(row[c])));
+      if (!existing) return 'created';
+      if (ignore) return 'skipped';
+      if (scoped && String(existing.scope_value).trim() !== String(row[scope]).trim()) { this.noteForeign(table, row.id); return 'skipped'; }
+      return 'updated';
     }
     const keys = Object.keys(row).filter((k) => row[k] !== undefined);
     const cols = keys.map((k) => `"${k}"`).join(', ');
@@ -341,8 +476,18 @@ class ImportRun {
       action = `DO UPDATE SET ${sets.join(', ')}${where}`;
     }
     const r = await one(`INSERT INTO ${table} (${cols}) VALUES (${vals}) ON CONFLICT (${conflict}) ${action} RETURNING (xmax = 0) AS inserted`, params);
-    if (!r) return 'skipped';
+    if (!r) {
+      if (scoped) this.noteForeign(table, row.id); // the id exists in another local workspace
+      return 'skipped';
+    }
     return r.inserted ? 'created' : 'updated';
+  }
+
+  // Clockify ids are kept, so a record already imported into another local workspace cannot be imported here.
+  noteForeign(table, id) {
+    const f = this.foreign.get(table) || { count: 0, sampleId: id };
+    f.count += 1;
+    this.foreign.set(table, f);
   }
 
   async exec(sql, params) {
@@ -430,6 +575,8 @@ export function normalizeRoles(user) {
     const entityIds = [];
     if (r.entityId) entityIds.push(r.entityId);
     if (r.role && typeof r.role === 'object' && r.role.entityId) entityIds.push(r.role.entityId);
+    // RoleDtoV1 ({ role: { id, name } }) may carry the managed entity as `id`; callers only accept ids that resolve
+    if (r.role && typeof r.role === 'object' && r.role.id && !r.role.entityId) entityIds.push(r.role.id);
     for (const e of arr(r.entities)) entityIds.push(typeof e === 'string' ? e : e?.id);
     for (const e of arr(r.entityIds)) entityIds.push(e);
     out.push({ role: String(roleName).toUpperCase(), entityIds: entityIds.filter(Boolean), sourceType: r.source?.type || r.role?.source?.type || r.sourceType || null });
@@ -459,6 +606,7 @@ export async function prepareNewWorkspace({ sourceWorkspace, owner, dryRun = fal
 export async function runClockifyImport(job, { apiKey, fetchImpl, state, onLog, onProgress } = {}) {
   const run = new ImportRun(job, { apiKey, fetchImpl, state, onLog, onProgress });
   await run.setStatus('RUNNING', { started: true });
+  run.startHeartbeat();
   run.log(`Importação iniciada (modo ${run.mode}${run.dryRun ? ', simulação/dryRun' : ''}, desde ${run.since.toISOString().slice(0, 10)})`);
   try {
     await prepare(run);
@@ -484,8 +632,13 @@ export async function runClockifyImport(job, { apiKey, fetchImpl, state, onLog, 
     run.progress.stage = 'DONE';
     run.progress.syncedAt = run.startedAt;
     run.progress.requests = run.client.stats;
+    await reportForeignRecords(run);
+    if (run.adoptedUsers.length) {
+      run.warn(`${run.adoptedUsers.length} pessoa(s) que não fazem mais parte do workspace no Clockify tinham registros de tempo ou despesas e foram incluídas como membros inativos, com o histórico preservado: ${run.adoptedUsers.slice(0, 10).join(', ')}${run.adoptedUsers.length > 10 ? '…' : ''}`);
+    }
     const failed = Object.entries(run.progress.stages).filter(([, s]) => s.status === 'FAILED').map(([n]) => n);
     run.log(`Importação concluída em ${Math.round((Date.now() - new Date(run.startedAt).getTime()) / 1000)}s – ${run.client.stats.requests} requisições à API do Clockify${failed.length ? `; etapas com falha: ${failed.join(', ')}` : ''}`);
+    if (run.progress.warnings.length) run.log(`${run.progress.warnings.length} aviso(s) – veja as linhas "ATENÇÃO" acima`);
     run.log(`Para sincronização incremental use since=${run.startedAt.slice(0, 10)} na próxima execução`);
     return await run.setStatus('DONE', { finished: true });
   } catch (err) {
@@ -499,16 +652,37 @@ export async function runClockifyImport(job, { apiKey, fetchImpl, state, onLog, 
     run.progress.stage = 'FAILED';
     run.log(`Importação falhou: ${err.message}`);
     return await run.setStatus('FAILED', { error: err.message, finished: true });
+  } finally {
+    run.stopHeartbeat();
   }
 }
 
+const FOREIGN_LABELS = {
+  time_entries: 'registro(s) de tempo', projects: 'projeto(s)', clients: 'cliente(s)', tags: 'etiqueta(s)', tasks: 'tarefa(s)', user_groups: 'grupo(s)',
+  custom_fields: 'campo(s) personalizado(s)', expenses: 'despesa(s)', expense_categories: 'categoria(s) de despesa', holidays: 'feriado(s)',
+  time_off_policies: 'política(s) de folga', time_off_requests: 'solicitação(ões) de folga', approval_requests: 'aprovação(ões)',
+  scheduling_assignments: 'agendamento(s)', invoices: 'fatura(s)',
+};
+
+async function reportForeignRecords(run) {
+  if (!run.foreign.size) return;
+  const entries = [...run.foreign.entries()];
+  const parts = entries.map(([table, f]) => `${f.count} ${FOREIGN_LABELS[table] || table}`);
+  const [table, f] = entries.find(([t]) => t === 'time_entries') || entries[0];
+  const other = await one(`SELECT w.id, w.name FROM ${table} t JOIN workspaces w ON w.id = t.workspace_id WHERE t.id = $1`, [f.sampleId]).catch(() => null);
+  run.warn(`${parts.join(', ')} deste workspace do Clockify já existem em outro workspace local${other ? ` (“${other.name}”, id ${other.id})` : ''}, de uma importação anterior, e não foram importados aqui: os IDs do Clockify são preservados e não podem estar em dois workspaces. Continue usando aquele workspace (importar de novo nele atualiza os dados) ou exclua-o antes de importar neste.`);
+}
+
 // ---------------------------------------------------------------------------------------------------------------
-// Preparation: authenticate, pick the source workspace, resolve the target workspace
+// Preparation: authenticate, pick the source workspace (and the data region that serves it), resolve the target
 // ---------------------------------------------------------------------------------------------------------------
+
+const isFatal = (err) => err instanceof ImportCancelledError || (err instanceof ClockifyApiError && err.status === 401);
 
 async function prepare(run) {
   let me;
-  try { me = await run.client.me(); } catch (err) { throw mapAuthError(err); }
+  try { me = await run.client.locateAccount(); } catch (err) { throw mapAuthError(err); }
+  run.me = me;
   run.log(`Autenticado no Clockify como ${me.name || ''} <${me.email}> (id ${me.id})`);
   run.progress.sourceUser = { id: me.id, email: me.email, name: me.name };
   const list = arr(await run.client.workspaces());
@@ -519,9 +693,19 @@ async function prepare(run) {
     else if (list.length) sourceId = list[0].id;
   }
   if (!sourceId) throw badRequest('sourceWorkspaceId is required (the API key has access to no workspace)', 400);
-  if (!list.some((w) => w.id === sourceId)) throw badRequest(`The API key has no access to workspace ${sourceId}. Available: ${list.map((w) => `${w.id} (${w.name})`).join(', ')}`, 400);
+  const listed = list.find((w) => w.id === sourceId);
+  // the workspace may live in another data region than the account: find the servers that hold its data
+  const located = await run.client.locateWorkspace(sourceId);
+  if (!listed && !located.ok) throw badRequest(`A chave de API não tem acesso ao workspace ${sourceId}. Disponíveis: ${list.map((w) => `${w.id} (${w.name})`).join(', ') || 'nenhum'}`, 400);
+  if (located.switched) run.log(`O workspace está armazenado na região ${run.client.endpoint.label}: usando ${run.client.baseUrl}`);
+  else if (!located.ok) run.warn(`Não foi possível ler dados do workspace em ${run.client.baseUrl} (${located.error?.message}). Se o workspace estiver em uma região de dados ou subdomínio, informe o servidor correto.`);
+  run.progress.sourceEndpoint = { baseUrl: run.client.baseUrl, reportsUrl: run.client.reportsUrl, region: run.client.endpoint.region, label: run.client.endpoint.label };
+  run.log(`Servidor do Clockify: ${run.client.endpoint.label} – API ${run.client.baseUrl}, relatórios ${run.client.reportsUrl}`);
   run.sourceWorkspaceId = sourceId;
-  run.sourceWorkspace = await run.client.workspace(sourceId);
+  try { run.sourceWorkspace = await run.client.workspace(sourceId); } catch (err) {
+    if (!listed || isFatal(err)) throw err;
+    run.sourceWorkspace = listed;
+  }
   run.progress.sourceWorkspaceId = sourceId;
   run.progress.sourceWorkspaceName = run.sourceWorkspace.name;
   run.log(`Workspace de origem: ${run.sourceWorkspace.name} (${sourceId})`);
@@ -542,7 +726,14 @@ async function prepare(run) {
   run.progress.targetWorkspaceId = run.targetWorkspaceId;
   run.progress.mode = run.mode;
   run.progress.dryRun = run.dryRun;
+  const previous = await one(
+    `SELECT w.id, w.name FROM import_jobs j JOIN workspaces w ON w.id = (j.progress->>'targetWorkspaceId')
+     WHERE j.source = 'CLOCKIFY_API' AND j.status = 'DONE' AND j.progress->>'sourceWorkspaceId' = $1 AND j.progress->>'targetWorkspaceId' <> $2
+       AND COALESCE((j.progress->>'dryRun')::boolean, false) = false
+     ORDER BY j.created_at DESC LIMIT 1`, [sourceId, run.targetWorkspaceId]);
+  if (previous) run.warn(`Este workspace do Clockify já foi importado para o workspace local “${previous.name}” (id ${previous.id}). Registros já importados lá não podem ser importados de novo aqui (os IDs do Clockify são preservados).`);
   await loadCurrencies(run);
+  await fetchSourceUsers(run); // also tells whether the key owner administers the source workspace
 }
 
 async function loadCurrencies(run) {
@@ -583,30 +774,82 @@ async function importWorkspace(run) {
 
 async function fetchSourceUsers(run) {
   if (run.sourceUsers) return run.sourceUsers;
-  run.sourceUsers = await run.client.getAll(`/workspaces/${run.sourceWorkspaceId}/users`, { query: { 'include-roles': true, status: 'ALL', memberships: 'ALL' }, pageSize: 200 });
+  const path = `/workspaces/${run.sourceWorkspaceId}/users`;
+  // richest query first; fall back to simpler ones when Clockify refuses a parameter for this key/plan
+  const attempts = [
+    { 'include-roles': true, status: 'ALL', memberships: 'ALL' },
+    { 'include-roles': false, status: 'ALL', memberships: 'WORKSPACE' },
+    { 'include-roles': false },
+  ];
+  let users = null; let usedQuery = null;
+  for (const q of attempts) {
+    try {
+      users = await run.client.getAll(path, { query: q, pageSize: 200 });
+      usedQuery = q;
+      break;
+    } catch (err) {
+      if (isFatal(err)) throw err;
+      run.log(`Listagem de usuários do Clockify (${Object.entries(q).map(([k, v]) => `${k}=${v}`).join('&')}) falhou: ${err.message}`);
+    }
+  }
+  const byId = new Map();
+  for (const u of users || []) if (u?.id) byId.set(u.id, u);
+  if (users) {
+    // the default listing leaves out kiosk-only "limited" users and deleted accounts – who may still own time entries
+    for (const status of EXTRA_ACCOUNT_STATUSES) {
+      try {
+        let added = 0;
+        for (const u of await run.client.getAll(path, { query: { ...usedQuery, 'account-statuses': status }, pageSize: 200 })) {
+          if (u?.id && !byId.has(u.id)) { byId.set(u.id, u); added += 1; }
+        }
+        if (added) run.log(`${added} usuário(s) com conta ${status} (fora da listagem padrão do Clockify) incluído(s)`);
+      } catch (err) {
+        if (isFatal(err)) throw err;
+        run.log(`Usuários com conta ${status} não puderam ser listados: ${err.message}`);
+      }
+    }
+  }
+  const self = run.me ? byId.get(run.me.id) : null;
+  run.sourceAccess = users ? accessOf(self) : 'NOT_ADMIN';
+  run.progress.sourceAccess = run.sourceAccess;
+  if (run.me && !self) byId.set(run.me.id, { id: run.me.id, email: run.me.email, name: run.me.name, settings: run.me.settings, profilePicture: run.me.profilePicture, memberships: [] });
+  run.sourceUsers = [...byId.values()];
   run.log(`${run.sourceUsers.length} usuário(s) encontrado(s) no Clockify`);
+  if (!users) run.warn(`A chave de ${run.me?.email} não conseguiu listar os membros do workspace no Clockify: só os dados desse usuário serão importados. Para migrar todos, use a chave de um administrador ou do proprietário.`);
+  else if (run.sourceAccess === 'NOT_ADMIN') run.warn(`${run.me?.email} não é administrador deste workspace no Clockify: só serão importados os dados que esse usuário enxerga (em geral apenas os próprios registros de tempo). Para migrar o workspace inteiro, use a chave de um administrador ou do proprietário.`);
   return run.sourceUsers;
 }
 
-// Decides the local id for every Clockify user (existing local account by e-mail, otherwise the Clockify id).
+const placeholderEmail = (id) => `clockify-${id}@sem-email.invalid`;
+const isDeletedAccount = (u) => ['DELETED', 'LIMITED_DELETED'].includes(String(u?.status || '').toUpperCase());
+
+// Decides the local account of a Clockify user: the account with the same e-mail, otherwise a new one that keeps the
+// Clockify id (or a fresh id when another account already uses it). Users without e-mail (kiosk-only "limited" users)
+// and deleted accounts get a placeholder address under the reserved .invalid domain: their history is kept without
+// taking that e-mail away from a real sign-up.
+async function planUser(run, u) {
+  const realEmail = lower(u.email);
+  const local = realEmail.includes('@') ? await one('SELECT id, email, name, active_workspace_id FROM users WHERE lower(email) = $1', [realEmail]) : null;
+  const placeholder = !local && (!realEmail.includes('@') || isDeletedAccount(u));
+  const email = placeholder ? placeholderEmail(u.id) : realEmail;
+  const existing = local || (placeholder ? await one('SELECT id, email, name, active_workspace_id FROM users WHERE lower(email) = $1', [email]) : null);
+  if (existing) return { source: u, email, placeholder, localId: existing.id, create: false, existing };
+  const byId = isValidId(u.id) ? await one('SELECT id FROM users WHERE id = $1', [u.id]) : null;
+  const localId = byId || !isValidId(u.id) ? newId() : u.id;
+  if (byId) run.log(`O id ${u.id} já pertence a outro usuário local; ${email} receberá o id ${localId}`);
+  return { source: u, email, placeholder, localId, create: true, existing: null };
+}
+
+// Decides the local id for every Clockify user of the workspace.
 async function planUsers(run) {
   if (run.userPlan) return run.userPlan;
   const users = await fetchSourceUsers(run);
   const plan = [];
   for (const u of users) {
-    const email = lower(u.email);
-    if (!email) { run.log(`Usuário ${u.id} sem e-mail – ignorado`); continue; }
-    const local = await one('SELECT id, email, name, active_workspace_id FROM users WHERE lower(email) = $1', [email]);
-    let localId; let create = false;
-    if (local) localId = local.id;
-    else {
-      const byId = isValidId(u.id) ? await one('SELECT id FROM users WHERE id = $1', [u.id]) : null;
-      localId = byId || !isValidId(u.id) ? newId() : u.id;
-      create = true;
-      if (byId) run.log(`O id ${u.id} já pertence a outro usuário local; ${email} receberá o id ${localId}`);
-    }
-    plan.push({ source: u, email, localId, create, existing: local });
-    run.userMap.set(u.id, localId);
+    if (!u?.id) continue;
+    const p = await planUser(run, u);
+    plan.push(p);
+    run.userMap.set(u.id, p.localId);
     if (u.settings?.timeZone) run.userTimeZone.set(u.id, u.settings.timeZone);
   }
   run.userPlan = plan;
@@ -626,46 +869,12 @@ async function buildUserMap(run) {
 
 async function importUsers(run) {
   const plan = await planUsers(run);
-  const ws = run.targetWorkspaceId;
   run.fetched('users', plan.length);
   let i = 0;
   for (const p of plan) {
     run.tick(++i, plan.length, p.email);
-    const u = p.source;
-    const membership = arr(u.memberships).find((m) => m.membershipType === 'WORKSPACE' && (!m.targetId || m.targetId === run.sourceWorkspaceId)) || arr(u.memberships).find((m) => m.membershipType === 'WORKSPACE') || {};
-    const status = ['ACTIVE', 'INACTIVE', 'PENDING', 'DECLINED'].includes(membership.membershipStatus) ? membership.membershipStatus : 'ACTIVE';
     try {
-      if (p.create) {
-        await run.exec(
-          `INSERT INTO users (id, email, name, profile_picture, status, settings, active_workspace_id, default_workspace_id) VALUES ($1,$2,$3,$4,'PENDING_EMAIL_VERIFICATION',$5,$6,$6) ON CONFLICT (id) DO NOTHING`,
-          [p.localId, p.email, u.name || p.email.split('@')[0], u.profilePicture || null, JSON.stringify(mapUserSettings(u.settings)), ws],
-        );
-        run.count('users', 'created');
-        run.log(`Usuário criado: ${p.email} (id ${p.localId}, sem senha – usar "esqueci a senha"/convite)`);
-      } else {
-        run.count('users', 'updated');
-        if (p.localId !== u.id) run.log(`Usuário ${p.email} mapeado para a conta local ${p.localId} (Clockify ${u.id})`);
-        if (!p.existing?.active_workspace_id) await run.exec('UPDATE users SET active_workspace_id = $2, default_workspace_id = COALESCE(default_workspace_id, $2) WHERE id = $1', [p.localId, ws]);
-      }
-      const isImporter = p.localId === run.importer.id || p.localId === run.targetWorkspace?.owner_id;
-      const profile = await memberProfile(run, u.id);
-      await run.exec(
-        `INSERT INTO workspace_members (workspace_id, user_id, status, hourly_rate_amount, hourly_rate_currency, cost_rate_amount, week_start, working_days, work_capacity, invited_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now())
-         ON CONFLICT (workspace_id, user_id) DO UPDATE SET
-           status = CASE WHEN $10::boolean THEN workspace_members.status ELSE EXCLUDED.status END,
-           hourly_rate_amount = COALESCE(EXCLUDED.hourly_rate_amount, workspace_members.hourly_rate_amount),
-           hourly_rate_currency = COALESCE(EXCLUDED.hourly_rate_currency, workspace_members.hourly_rate_currency),
-           cost_rate_amount = COALESCE(EXCLUDED.cost_rate_amount, workspace_members.cost_rate_amount),
-           week_start = COALESCE(EXCLUDED.week_start, workspace_members.week_start),
-           working_days = COALESCE(EXCLUDED.working_days, workspace_members.working_days),
-           work_capacity = COALESCE(EXCLUDED.work_capacity, workspace_members.work_capacity)`,
-        [ws, p.localId, isImporter ? 'ACTIVE' : status, cents(membership.hourlyRate), membership.hourlyRate?.currency || null, cents(membership.costRate),
-          profile.weekStart || u.weekStart || null, profile.workingDays ? JSON.stringify(profile.workingDays) : (Array.isArray(u.workingDays) ? JSON.stringify(u.workingDays) : null), profile.workCapacity || u.workCapacity || null, isImporter],
-      );
-      run.local.users.add(p.localId);
-      for (const cf of arr(u.customFields)) if (cf.customFieldId) run.pendingUserCustomFields.push({ userId: p.localId, customFieldId: cf.customFieldId, value: cf.value });
-      await importUserRoles(run, u, p.localId);
+      await writeUser(run, p);
     } catch (err) {
       run.count('users', 'errors');
       run.log(`Erro ao importar usuário ${p.email}: ${err.message}`);
@@ -674,12 +883,65 @@ async function importUsers(run) {
   run.progress.userMap = Object.fromEntries(run.userMap);
 }
 
+const MEMBER_STATUSES = ['ACTIVE', 'INACTIVE', 'PENDING', 'DECLINED'];
+
+// Writes the local account and the workspace membership of a planned user. `removed`: the person no longer belongs to
+// the Clockify workspace (found only in reports) – added as an inactive member; an existing membership is kept as is.
+async function writeUser(run, p, { removed = false } = {}) {
+  const ws = run.targetWorkspaceId;
+  const u = p.source;
+  const deleted = isDeletedAccount(u);
+  const membership = arr(u.memberships).find((m) => m.membershipType === 'WORKSPACE' && (!m.targetId || m.targetId === run.sourceWorkspaceId)) || arr(u.memberships).find((m) => m.membershipType === 'WORKSPACE') || {};
+  const status = removed || deleted ? 'INACTIVE' : (MEMBER_STATUSES.includes(membership.membershipStatus) ? membership.membershipStatus : 'ACTIVE');
+  if (p.create) {
+    const accountStatus = deleted ? 'DELETED' : p.placeholder ? 'NOT_REGISTERED' : 'PENDING_EMAIL_VERIFICATION';
+    const name = String(u.name || '').trim() || (removed ? `Ex-membro ${String(u.id).slice(-6)}` : p.placeholder ? `Usuário ${String(u.id).slice(-6)}` : p.email.split('@')[0]);
+    await run.exec(
+      `INSERT INTO users (id, email, name, profile_picture, status, settings, active_workspace_id, default_workspace_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$7) ON CONFLICT (id) DO NOTHING`,
+      [p.localId, p.email, name, u.profilePicture || null, accountStatus, JSON.stringify(mapUserSettings(u.settings)), ws],
+    );
+    run.count('users', 'created');
+    const kind = deleted ? 'com conta excluída' : removed ? 'fora do workspace, sem e-mail conhecido' : 'sem e-mail (usuário limitado/quiosque)';
+    run.log(p.placeholder
+      ? `Usuário ${kind} criado: ${name} (id ${p.localId}, e-mail fictício ${p.email} – não recebe e-mails nem faz login)`
+      : `Usuário criado: ${p.email} (id ${p.localId}, sem senha – usar "esqueci a senha"/convite)`);
+  } else {
+    run.count('users', 'updated');
+    if (p.localId !== u.id) run.log(`Usuário ${p.email} mapeado para a conta local ${p.localId} (Clockify ${u.id})`);
+    if (!p.existing?.active_workspace_id) await run.exec('UPDATE users SET active_workspace_id = $2, default_workspace_id = COALESCE(default_workspace_id, $2) WHERE id = $1', [p.localId, ws]);
+  }
+  const isImporter = p.localId === run.importer.id || p.localId === run.targetWorkspace?.owner_id;
+  if (removed) {
+    await run.exec(`INSERT INTO workspace_members (workspace_id, user_id, status, invited_at) VALUES ($1,$2,'INACTIVE',now()) ON CONFLICT (workspace_id, user_id) DO NOTHING`, [ws, p.localId]);
+  } else {
+    const profile = deleted ? {} : await memberProfile(run, u.id);
+    await run.exec(
+      `INSERT INTO workspace_members (workspace_id, user_id, status, hourly_rate_amount, hourly_rate_currency, cost_rate_amount, week_start, working_days, work_capacity, invited_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now())
+       ON CONFLICT (workspace_id, user_id) DO UPDATE SET
+         status = CASE WHEN $10::boolean THEN workspace_members.status ELSE EXCLUDED.status END,
+         hourly_rate_amount = COALESCE(EXCLUDED.hourly_rate_amount, workspace_members.hourly_rate_amount),
+         hourly_rate_currency = COALESCE(EXCLUDED.hourly_rate_currency, workspace_members.hourly_rate_currency),
+         cost_rate_amount = COALESCE(EXCLUDED.cost_rate_amount, workspace_members.cost_rate_amount),
+         week_start = COALESCE(EXCLUDED.week_start, workspace_members.week_start),
+         working_days = COALESCE(EXCLUDED.working_days, workspace_members.working_days),
+         work_capacity = COALESCE(EXCLUDED.work_capacity, workspace_members.work_capacity)`,
+      [ws, p.localId, isImporter ? 'ACTIVE' : status, cents(membership.hourlyRate), membership.hourlyRate?.currency || null, cents(membership.costRate),
+        profile.weekStart || u.weekStart || null, profile.workingDays ? JSON.stringify(profile.workingDays) : (Array.isArray(u.workingDays) ? JSON.stringify(u.workingDays) : null), profile.workCapacity || u.workCapacity || null, isImporter],
+    );
+  }
+  run.local.users.add(p.localId);
+  for (const cf of arr(u.customFields)) if (cf.customFieldId) run.pendingUserCustomFields.push({ userId: p.localId, customFieldId: cf.customFieldId, value: cf.value });
+  if (!deleted) await importUserRoles(run, u, p.localId);
+}
+
 async function memberProfile(run, sourceUserId) {
   if (run.options.memberProfiles === false) return {};
   try {
     const p = await run.client.get(`/workspaces/${run.sourceWorkspaceId}/member-profile/${sourceUserId}`);
     return { weekStart: p?.weekStart || null, workingDays: Array.isArray(p?.workingDays) ? p.workingDays : (typeof p?.workingDays === 'string' ? [p.workingDays] : null), workCapacity: p?.workCapacity || null };
   } catch (err) {
+    if (isFatal(err)) throw err;
     run.warnOnce('member-profile', `Perfis de membro (member-profile) indisponíveis: ${err.message}`);
     return {};
   }
@@ -688,15 +950,12 @@ async function memberProfile(run, sourceUserId) {
 async function importUserRoles(run, u, localId) {
   const ws = run.targetWorkspaceId;
   for (const r of normalizeRoles(u)) {
-    if (r.role === 'OWNER' || r.role === 'WORKSPACE_ADMIN') {
+    if (ADMIN_ROLES.has(r.role)) {
       if (localId === run.targetWorkspace?.owner_id) continue;
       await run.exec(`INSERT INTO roles (id, workspace_id, user_id, role, entity_id, source_type) VALUES ($1,$2,$3,'WORKSPACE_ADMIN',$2,$4) ON CONFLICT DO NOTHING`, [newId(), ws, localId, r.sourceType]);
     } else if (r.role === 'TEAM_MANAGER') {
-      for (const eid of r.entityIds) {
-        const target = run.mapUser(eid) || eid; // user id (mapped) or group id (preserved)
-        if (!isValidId(target)) continue;
-        await run.exec(`INSERT INTO roles (id, workspace_id, user_id, role, entity_id, source_type) VALUES ($1,$2,$3,'TEAM_MANAGER',$4,$5) ON CONFLICT DO NOTHING`, [newId(), ws, localId, target, r.sourceType]);
-      }
+      // managed users or groups: resolved once the user groups are imported (see flushPending)
+      for (const eid of r.entityIds) run.pendingTeamManagers.push({ userId: localId, entityId: eid, sourceType: r.sourceType });
     } else if (r.role === 'PROJECT_MANAGER') {
       for (const eid of r.entityIds) run.pendingProjectManagers.push({ userId: localId, projectId: eid, sourceType: r.sourceType });
     }
@@ -718,7 +977,7 @@ async function importUserGroups(run) {
     if (!isValidId(id)) id = newId();
     const res = await run.upsert('user_groups', { id, workspace_id: ws, name: g.name || 'Grupo' }, ['name']);
     run.count('userGroups', res);
-    if (res === 'skipped') { run.log(`Grupo ${g.id} pertence a outro workspace local – ignorado`); return; }
+    if (res === 'skipped') return; // id of another local workspace (summarised at the end)
     run.local.group.add(id);
     if (id !== g.id) run.map.group.set(g.id, id);
     for (const uid of arr(g.userIds)) {
@@ -754,7 +1013,7 @@ async function importClients(run) {
       id, workspace_id: ws, name: c.name || 'Cliente', address: c.address || null, email: c.email || null, cc_emails: arr(c.ccEmails), note: c.note || null, currency_id: currencyId, archived: !!c.archived,
     }, ['name', 'address', 'email', 'cc_emails', 'note', 'currency_id', 'archived']);
     run.count('clients', res);
-    if (res === 'skipped') { run.log(`Cliente ${c.id} pertence a outro workspace local – ignorado`); return; }
+    if (res === 'skipped') return; // id of another local workspace (summarised at the end)
     run.local.client.add(id);
     if (id !== c.id) run.map.client.set(c.id, id);
   });
@@ -810,7 +1069,7 @@ async function importProjects(run) {
       estimate_type: p.timeEstimate?.type || p.estimate?.type || 'AUTO', time_estimate: timeEstimateOf(p), budget_estimate: budgetEstimateOf(p), estimate_reset: p.estimateReset || null,
     }, ['name', 'client_id', 'color', 'note', 'billable', 'is_public', 'archived', 'is_template', 'hourly_rate_amount', 'hourly_rate_currency', 'cost_rate_amount', 'estimate_type', 'time_estimate', 'budget_estimate', 'estimate_reset']);
     run.count('projects', res);
-    if (res === 'skipped') { run.log(`Projeto ${p.id} pertence a outro workspace local – ignorado`); return; }
+    if (res === 'skipped') return; // id of another local workspace (summarised at the end)
     run.local.project.add(id);
     if (id !== p.id) run.map.project.set(p.id, id);
     for (const m of arr(p.memberships)) {
@@ -832,8 +1091,8 @@ async function importProjects(run) {
 async function applyProjectManagers(run) {
   const ws = run.targetWorkspaceId;
   for (const pm of run.pendingProjectManagers.splice(0)) {
-    const projectId = run.resolve('project', pm.projectId) || pm.projectId;
-    if (!isValidId(projectId)) continue;
+    const projectId = run.resolve('project', pm.projectId);
+    if (!projectId) continue;
     await run.exec(`INSERT INTO roles (id, workspace_id, user_id, role, entity_id, source_type) VALUES ($1,$2,$3,'PROJECT_MANAGER',$4,$5) ON CONFLICT DO NOTHING`, [newId(), ws, pm.userId, projectId, pm.sourceType || null]);
   }
   await run.exec(`UPDATE project_members pm SET is_manager = true FROM roles r WHERE r.workspace_id = $1 AND r.role = 'PROJECT_MANAGER' AND r.entity_id = pm.project_id AND pm.target_type = 'USER' AND pm.target_id = r.user_id AND pm.is_manager = false`, [ws]);
@@ -872,7 +1131,7 @@ async function importTasks(run) {
         hourly_rate_amount: cents(t.hourlyRate), hourly_rate_currency: t.hourlyRate?.currency || null, cost_rate_amount: cents(t.costRate),
       }, ['project_id', 'name', 'status', 'estimate_seconds', 'budget_estimate', 'billable', 'hourly_rate_amount', 'hourly_rate_currency', 'cost_rate_amount']);
       run.count('tasks', res);
-      if (res === 'skipped') { run.log(`Tarefa ${t.id} pertence a outro workspace local – ignorada`); return; }
+      if (res === 'skipped') return; // id of another local workspace (summarised at the end)
       run.local.task.set(id, projectId);
       if (id !== t.id) run.map.task.set(t.id, id);
       const assignees = arr(t.assigneeIds).length ? t.assigneeIds : (t.assigneeId ? [t.assigneeId] : []);
@@ -907,7 +1166,7 @@ async function importTags(run) {
     if (!isValidId(id)) id = newId();
     const res = await run.upsert('tags', { id, workspace_id: ws, name: t.name || 'tag', archived: !!t.archived }, ['name', 'archived']);
     run.count('tags', res);
-    if (res === 'skipped') { run.log(`Etiqueta ${t.id} pertence a outro workspace local – ignorada`); return; }
+    if (res === 'skipped') return; // id of another local workspace (summarised at the end)
     run.local.tag.add(id);
     if (id !== t.id) run.map.tag.set(t.id, id);
   });
@@ -935,7 +1194,7 @@ async function importCustomFields(run) {
     };
     const res = await run.upsert('custom_fields', row, ['name', 'type', 'entity_type', 'placeholder', 'description', 'allowed_values', 'workspace_default_value', 'status', 'required', 'only_admin_can_edit']);
     run.count('customFields', res);
-    if (res === 'skipped') { run.log(`Campo personalizado ${f.id} pertence a outro workspace local – ignorado`); return; }
+    if (res === 'skipped') return; // id of another local workspace (summarised at the end)
     run.local.customField.set(id, { ...row, allowed_values: row.allowed_values });
     if (id !== f.id) run.map.customField.set(f.id, id);
     for (const d of arr(f.projectDefaultValues)) {
@@ -958,6 +1217,13 @@ async function flushPending(run) {
         [v.userId, fieldId, ws, JSON.stringify(v.value ?? null)]);
     } catch (err) { run.log(`Valor de campo personalizado do usuário ${v.userId} não importado: ${err.message}`); }
   }
+  for (const tm of run.pendingTeamManagers.splice(0)) {
+    const target = run.mapUser(tm.entityId) || run.resolve('group', tm.entityId);
+    if (!target) continue;
+    try {
+      await run.exec(`INSERT INTO roles (id, workspace_id, user_id, role, entity_id, source_type) VALUES ($1,$2,$3,'TEAM_MANAGER',$4,$5) ON CONFLICT DO NOTHING`, [newId(), ws, tm.userId, target, tm.sourceType || null]);
+    } catch (err) { run.log(`Papel de gerente de equipe de ${tm.userId} não importado: ${err.message}`); }
+  }
   if (run.pendingProjectManagers.length) await applyProjectManagers(run);
 }
 
@@ -967,10 +1233,11 @@ async function flushPending(run) {
 
 async function importTimeEntries(run) {
   const seen = new Set();
+  run.seenTimeEntries = seen;
   const users = [...run.userMap.entries()];
   const now = new Date(Date.now() + DAY_MS);
+  const pageSize = Math.min(run.options.pageSize || MAX_TIME_ENTRY_PAGE, MAX_TIME_ENTRY_PAGE);
   let ui = 0; let processed = 0;
-  run.timeEntryIds = new Set();
   for (const [sourceUid, localUid] of users) {
     ui += 1;
     const label = `usuário ${ui}/${users.length}`;
@@ -987,19 +1254,193 @@ async function importTimeEntries(run) {
       for (const [start, end] of windows(run.since, now, 366, 2)) {
         await run.checkCancelledFast();
         await run.client.getAll(`/workspaces/${run.sourceWorkspaceId}/user/${sourceUid}/time-entries`, {
-          pageSize: run.options.pageSize || 1000, collect: false, query: { hydrated: false, start: toIso(start), end: toIso(end) }, onPage: write,
+          pageSize, collect: false, query: { hydrated: false, start: toIso(start), end: toIso(end) }, onPage: write,
         });
       }
       // running timer (may be excluded by the end filter)
-      const running = arr(await run.client.get(`/workspaces/${run.sourceWorkspaceId}/user/${sourceUid}/time-entries`, { hydrated: false, 'in-progress': true, 'page-size': 50 }));
+      const running = arr(await run.client.get(`/workspaces/${run.sourceWorkspaceId}/user/${sourceUid}/time-entries`, { hydrated: false, 'in-progress': true, page: 1, 'page-size': 50 }));
       await write(running);
     } catch (err) {
-      if (err instanceof ImportCancelledError) throw err;
+      if (isFatal(err)) throw err;
       run.count('timeEntries', 'errors');
-      run.log(`Registros de tempo do usuário ${sourceUid}: ${err.message}`);
+      run.log(`Registros de tempo do usuário ${sourceUid}: ${err.message} (o relatório detalhado tentará recuperá-los)`);
     }
   }
-  run.log(`${processed} registro(s) de tempo processado(s)`);
+  run.log(`${processed} registro(s) de tempo processado(s) pela listagem por usuário`);
+  if (run.options.reconcile === false) { run.log('Conferência com o relatório detalhado desativada'); return; }
+  try {
+    await reconcileWithDetailedReport(run);
+  } catch (err) {
+    if (err instanceof ImportCancelledError) throw err;
+    run.progress.reconciliation = { error: err.message };
+    run.warn(`Não foi possível conferir os registros com o relatório detalhado do Clockify (${err.message}). Registros de pessoas removidas do workspace no Clockify podem ter ficado de fora.`);
+  }
+}
+
+// Detailed report entry → the shape of GET /time-entries that writeTimeEntry understands.
+export function fromReportEntry(e) {
+  const ti = e?.timeInterval || {};
+  const start = validDate(ti.start); const end = validDate(ti.end);
+  let seconds = null;
+  if (typeof ti.duration === 'number') seconds = ti.duration;
+  else if (typeof ti.duration === 'string' && ti.duration) seconds = /^\d+(\.\d+)?$/.test(ti.duration) ? Number(ti.duration) : safeSeconds(ti.duration);
+  if (seconds == null || !Number.isFinite(seconds)) seconds = start && end ? Math.round((end - start) / 1000) : 0;
+  const tags = arr(e?.tags).map((t) => (typeof t === 'string' ? t : t?.id || t?._id)).filter(Boolean);
+  return {
+    id: e?._id || e?.id || null, userId: e?.userId || null, userName: e?.userName || '', userEmail: e?.userEmail || '',
+    projectId: e?.projectId || null, taskId: e?.taskId || null, tagIds: [...new Set([...tags, ...arr(e?.tagIds)])],
+    billable: !!e?.billable, description: e?.description || '', type: e?.type || 'REGULAR', isLocked: !!(e?.isLocked ?? e?.locked), kioskId: e?.kioskId || null,
+    timeInterval: { start: ti.start || null, end: ti.end || null }, seconds,
+    hourlyRate: e?.hourlyRate && typeof e.hourlyRate === 'object' ? e.hourlyRate : undefined,
+    costRate: e?.costRate && typeof e.costRate === 'object' ? e.costRate : undefined,
+    customFieldValues: arr(e?.customFieldValues || e?.customFields).map((cf) => ({ customFieldId: cf?.customFieldId || cf?.id, value: cf?.value })).filter((cf) => cf.customFieldId),
+  };
+}
+
+const fmtHours = (s) => `${(s / 3600).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} h`;
+
+// Second pass over the Detailed report (reports API), period by period. It brings the entries the per-user listing
+// did not return – above all those of people removed from the workspace, whom the users listing no longer shows – and
+// reconciles, user by user, what Clockify reports with what is stored locally (progress.reconciliation).
+async function reconcileWithDetailedReport(run) {
+  const ws = run.targetWorkspaceId;
+  const until = new Date();
+  const rec = {
+    from: run.since.toISOString(), to: until.toISOString(), complete: true, windowDays: null, allUsersFilter: true, reportTotals: null,
+    clockify: { entries: 0, seconds: 0 }, local: run.dryRun ? null : { entries: 0, seconds: 0 }, missing: run.dryRun ? null : 0,
+    recovered: 0, removedUsers: [], users: [], missingSamples: [],
+  };
+  const perUser = new Map();
+  const row = (e) => {
+    let r = perUser.get(e.userId);
+    if (!r) {
+      r = { userId: e.userId, localUserId: null, name: e.userName || '', email: e.userEmail || '', clockify: { entries: 0, seconds: 0 }, local: run.dryRun ? null : { entries: 0, seconds: 0 } };
+      perUser.set(e.userId, r);
+    }
+    return r;
+  };
+  run.log('Conferindo com o relatório detalhado do Clockify (inclui pessoas removidas do workspace)…');
+
+  const onPage = async (items) => {
+    await run.checkCancelledFast();
+    const entries = items.map(fromReportEntry).filter((e) => e.id && validDate(e.timeInterval.start));
+    for (const e of entries) {
+      const r = row(e);
+      r.clockify.entries += 1; r.clockify.seconds += e.seconds;
+      rec.clockify.entries += 1; rec.clockify.seconds += e.seconds;
+    }
+    // entries the per-user listing did not bring
+    const fresh = entries.filter((e) => !run.seenTimeEntries.has(e.id));
+    const freshIds = new Set();
+    if (fresh.length) {
+      fresh.forEach((e) => { run.seenTimeEntries.add(e.id); freshIds.add(e.id); });
+      run.fetched('timeEntries', fresh.length);
+      const writable = [];
+      for (const e of fresh) {
+        if (run.userMap.has(e.userId) || await adoptUnlistedUser(run, e)) writable.push(e);
+        else run.count('timeEntries', 'skipped');
+      }
+      await run.writeBatch('timeEntries', writable, (e) => writeTimeEntry(run, e, run.userMap.get(e.userId)), { size: 250 });
+      if (run.dryRun) rec.recovered += writable.length;
+    }
+    if (!run.dryRun && entries.length) {
+      const found = await rows('SELECT id, EXTRACT(EPOCH FROM (end_time - start_time))::float8 AS secs FROM time_entries WHERE workspace_id = $1 AND deleted_at IS NULL AND id = ANY($2)', [ws, entries.map((e) => e.id)]);
+      const secs = new Map(found.map((f) => [f.id, f.secs == null ? 0 : Number(f.secs)]));
+      for (const e of entries) {
+        const r = row(e);
+        if (secs.has(e.id)) {
+          r.local.entries += 1; r.local.seconds += secs.get(e.id);
+          rec.local.entries += 1; rec.local.seconds += secs.get(e.id);
+          if (freshIds.has(e.id)) rec.recovered += 1;
+        } else {
+          rec.missing += 1;
+          if (rec.missingSamples.length < 50) rec.missingSamples.push({ id: e.id, userId: e.userId, userName: e.userName, start: e.timeInterval.start, description: String(e.description || '').slice(0, 120) });
+        }
+      }
+    }
+    run.tick(rec.clockify.entries, null, 'conferência com o relatório detalhado');
+  };
+
+  // Long periods first; the FREE plan limits the report to 31 days, and some accounts may refuse the explicit
+  // "all users" filter – each fallback is tried only while nothing has been read yet.
+  const strategies = [{ days: 366, allUsers: true }, { days: 31, allUsers: true }, { days: 31, allUsers: false }];
+  let si = 0; let succeeded = 0;
+  let from = new Date(run.since);
+  while (from < until) {
+    await run.checkCancelledFast();
+    const { days, allUsers } = strategies[si];
+    const to = new Date(Math.min(until.getTime(), from.getTime() + days * DAY_MS));
+    const before = rec.clockify.entries;
+    let totals = null;
+    try {
+      await run.client.detailedReport(run.sourceWorkspaceId, { start: from, end: to, allUsers, onPage, onTotals: (t) => { totals = t; } });
+    } catch (err) {
+      if (err instanceof ImportCancelledError) throw err;
+      const refused = err instanceof ClockifyApiError && [400, 402, 403, 422].includes(err.status);
+      if (!succeeded && rec.clockify.entries === before && refused && si < strategies.length - 1) {
+        si += 1;
+        run.log(`O relatório detalhado recusou a consulta (${err.message}); nova tentativa com períodos de ${strategies[si].days} dias${strategies[si].allUsers ? '' : ' e o filtro de usuários padrão'}`);
+        continue;
+      }
+      if (!succeeded) throw err;
+      rec.complete = false;
+      run.log(`Relatório detalhado de ${toIso(from).slice(0, 10)} a ${toIso(to).slice(0, 10)} não pôde ser lido: ${err.message}`);
+      from = to;
+      continue;
+    }
+    succeeded += 1;
+    const expected = Number(totals?.entriesCount);
+    if (Number.isFinite(expected) && totals?.entriesCount != null) {
+      rec.reportTotals = (rec.reportTotals || 0) + expected;
+      const got = rec.clockify.entries - before;
+      if (got < expected) run.log(`Relatório detalhado de ${toIso(from).slice(0, 10)} a ${toIso(to).slice(0, 10)}: o Clockify informou ${expected} registro(s), ${got} foram lidos`);
+    }
+    from = to;
+  }
+  rec.windowDays = strategies[si].days;
+  rec.allUsersFilter = strategies[si].allUsers;
+  for (const r of perUser.values()) r.localUserId = run.userMap.get(r.userId) || null;
+  rec.users = [...perUser.values()].sort((a, b) => b.clockify.entries - a.clockify.entries || String(a.name).localeCompare(String(b.name)));
+  run.progress.reconciliation = rec;
+
+  rec.removedUsers = [...run.adoptedUsers];
+  const c = rec.clockify;
+  if (run.dryRun) {
+    run.log(`Relatório detalhado do Clockify: ${c.entries} registro(s), ${fmtHours(c.seconds)} desde ${rec.from.slice(0, 10)}${rec.recovered ? ` – ${rec.recovered} seriam recuperados (não vieram pela listagem por usuário)` : ''}`);
+  } else if (!rec.missing) {
+    run.log(`Conferência OK: o Clockify reporta ${c.entries} registro(s) (${fmtHours(c.seconds)}) desde ${rec.from.slice(0, 10)} e todos estão no Clockfy (${fmtHours(rec.local.seconds)})${rec.recovered ? `; ${rec.recovered} recuperado(s) pelo relatório` : ''}`);
+  } else {
+    run.warn(`${rec.missing} de ${c.entries} registro(s) de tempo do Clockify não estão no Clockfy – veja a conferência por usuário e as linhas de erro do log`);
+  }
+  if (!rec.complete) run.warn('A conferência com o relatório detalhado ficou incompleta: algum período não pôde ser lido (veja o log)');
+}
+
+// A person who owns data (time entries, expenses) but is not in the users listing – removed from the workspace, or an
+// account Clockify no longer lists: kept locally as an inactive member so that their history is not lost.
+async function adoptUnlistedUser(run, { userId, userName, userEmail }) {
+  if (!userId || run.rejectedUsers.has(userId)) return null;
+  if (run.userMap.has(userId)) return run.userMap.get(userId);
+  const p = await planUser(run, { id: userId, email: userEmail, name: userName });
+  const label = userName || (p.placeholder ? `ex-membro sem nome conhecido (id ${userId})` : p.email);
+  if (p.create && !run.wants('users')) {
+    run.rejectedUsers.add(userId);
+    run.warn(`Dados de ${label} (fora do workspace no Clockify) ignorados: a etapa "users" não foi selecionada`);
+    return null;
+  }
+  run.fetched('users', 1);
+  try {
+    await writeUser(run, p, { removed: true });
+  } catch (err) {
+    run.rejectedUsers.add(userId);
+    run.count('users', 'errors');
+    run.log(`Erro ao incluir ${label} (fora do workspace no Clockify): ${err.message}`);
+    return null;
+  }
+  run.userMap.set(userId, p.localId);
+  run.progress.userMap = Object.fromEntries(run.userMap);
+  run.adoptedUsers.push(p.placeholder ? label : `${label} <${p.email}>`);
+  run.log(`${label} não faz mais parte do workspace no Clockify: incluído(a) como membro inativo (id local ${p.localId})`);
+  return p.localId;
 }
 
 async function writeTimeEntry(run, e, localUid) {
@@ -1032,8 +1473,7 @@ async function writeTimeEntry(run, e, localUid) {
     hourly_rate_amount: hourly, hourly_rate_currency: currency || run.defaultCurrency, cost_rate_amount: cost, time_zone: run.userTimeZone.get(e.userId) || null, origin: 'IMPORT', deleted_at: null,
   }, ['user_id', 'project_id', 'task_id', 'description', 'start_time', 'end_time', 'billable', 'type', 'locked', 'kiosk_id', 'hourly_rate_amount', 'hourly_rate_currency', 'cost_rate_amount', 'time_zone', 'deleted_at']);
   run.count('timeEntries', res);
-  if (res === 'skipped') { run.warnOnce(`entry-other-ws:${id}`, `Registro ${id} pertence a outro workspace local – ignorado`); return; }
-  run.timeEntryIds.add(id);
+  if (res === 'skipped') return; // id of another local workspace (summarised at the end)
   const tagIds = [...new Set(arr(e.tagIds).map((t) => run.resolve('tag', t)).filter(Boolean))];
   await run.exec('DELETE FROM time_entry_tags WHERE time_entry_id = $1', [id]);
   for (const t of tagIds) await run.exec('INSERT INTO time_entry_tags (time_entry_id, tag_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [id, t]);
@@ -1073,25 +1513,37 @@ async function importExpenses(run) {
   });
 
   const seen = new Set();
-  const users = [...run.userMap.entries()];
-  let ui = 0; let processed = 0;
-  for (const [sourceUid, localUid] of users) {
+  let processed = 0; let label = 'workspace';
+  const handler = (listedUid) => async (items) => {
+    const fresh = items.filter((x) => x && x.id && !seen.has(x.id)).map((x) => (x.userId || !listedUid ? x : { ...x, userId: listedUid }));
+    fresh.forEach((x) => seen.add(x.id));
+    run.fetched('expenses', fresh.length);
+    const writable = [];
+    for (const x of fresh) {
+      const ok = run.userMap.has(x.userId) || await adoptUnlistedUser(run, { userId: x.userId, userName: x.userName || x.user?.name, userEmail: x.userEmail || x.user?.email });
+      if (ok) writable.push(x); else run.count('expenses', 'skipped');
+    }
+    await run.writeBatch('expenses', writable, (x) => writeExpense(run, x, run.userMap.get(x.userId)), { size: 50 });
+    processed += fresh.length;
+    run.tick(processed, null, label);
+  };
+  // the workspace-wide listing also returns expenses of people no longer in the workspace
+  try {
+    await run.client.getAll(`/workspaces/${run.sourceWorkspaceId}/expenses`, { pageSize: 200, collect: false, extract: extractExpenses, onPage: handler(null) });
+  } catch (err) {
+    if (isFatal(err)) throw err;
+    run.log(`Listagem geral de despesas indisponível (${err.message}); buscando por usuário`);
+  }
+  const users = [...run.userMap.keys()];
+  let ui = 0;
+  for (const sourceUid of users) {
     ui += 1;
-    run.tick(processed, null, `usuário ${ui}/${users.length}`);
+    label = `usuário ${ui}/${users.length}`;
+    run.tick(processed, null, label);
     try {
-      await run.client.getAll(`/workspaces/${run.sourceWorkspaceId}/expenses`, {
-        pageSize: 200, collect: false, query: { 'user-id': sourceUid }, extract: extractExpenses,
-        onPage: async (items) => {
-          const fresh = items.filter((x) => x && x.id && !seen.has(x.id));
-          fresh.forEach((x) => seen.add(x.id));
-          run.fetched('expenses', fresh.length);
-          await run.writeBatch('expenses', fresh, (x) => writeExpense(run, x, localUid), { size: 50 });
-          processed += fresh.length;
-          run.tick(processed, null, `usuário ${ui}/${users.length}`);
-        },
-      });
+      await run.client.getAll(`/workspaces/${run.sourceWorkspaceId}/expenses`, { pageSize: 200, collect: false, query: { 'user-id': sourceUid }, extract: extractExpenses, onPage: handler(sourceUid) });
     } catch (err) {
-      if (err instanceof ImportCancelledError) throw err;
+      if (isFatal(err)) throw err;
       run.count('expenses', 'errors');
       run.log(`Despesas do usuário ${sourceUid}: ${err.message}`);
     }

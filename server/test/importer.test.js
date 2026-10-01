@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { setupTestApp } from './helpers.js';
 
+// the mock Clockify server listens on 127.0.0.1 – outside *.clockify.me, so it must be allowed explicitly
+process.env.CLOCKIFY_IMPORT_ALLOWED_HOSTS = '127.0.0.1';
+
 // ---------------------------------------------------------------------------------------------------------------
 // Mock of the Clockify API (fixtures with fixed 24-hex ids)
 // ---------------------------------------------------------------------------------------------------------------
@@ -75,12 +78,77 @@ function buildFixture(seed, { ownerEmail, name }) {
   };
 }
 
+// A workspace with the cases that silently lose history when handled naively: a kiosk-only "limited" user without
+// e-mail (left out of the default users listing), a deleted account, a person removed from the workspace (only the
+// detailed report still shows their entries), an expense of another removed person, a user whose entries exceed the
+// server's silent page-size cap, and a FREE plan (detailed report limited to 31-day periods).
+function buildRealisticFixture(seed, { ownerEmail, ownerId, name }) {
+  const id = (kind, n) => hex(seed, kind, n);
+  const WS = id('00', 1);
+  const U_OWNER = ownerId; const U_KIOSK = id('a0', 2); const U_BULK = id('a0', 3); const U_GONE = id('a0', 4); const U_EXP_ONLY = id('a0', 5); const U_DELETED = id('a0', 6);
+  const PROJ = id('b0', 1);
+  const entries = [];
+  const add = (userId, start, minutes) => {
+    const s = new Date(start); const e = new Date(s.getTime() + minutes * 60000);
+    const n = entries.length + 1;
+    entries.push({ id: id('10', n), userId, projectId: PROJ, taskId: null, tagIds: [], billable: true, description: `entry ${n}`, type: 'REGULAR', isLocked: false, timeInterval: { start: s.toISOString().replace('.000Z', 'Z'), end: e.toISOString().replace('.000Z', 'Z'), duration: `PT${minutes}M` }, customFieldValues: [] });
+  };
+  add(U_OWNER, '2023-03-01T10:00:00Z', 60); add(U_OWNER, '2024-03-01T10:00:00Z', 30);
+  add(U_KIOSK, '2024-05-02T08:00:00Z', 240); add(U_KIOSK, '2024-05-03T08:00:00Z', 480);
+  add(U_GONE, '2021-07-01T09:00:00Z', 90); add(U_GONE, '2021-07-02T09:00:00Z', 45); add(U_GONE, '2022-06-10T09:00:00Z', 120);
+  add(U_DELETED, '2020-02-02T10:00:00Z', 60);
+  for (let i = 0; i < 450; i++) add(U_BULK, new Date(Date.UTC(2022, 0, 1, 8) + i * 2 * 3600000), 30);
+  const member = (userId, status = 'ACTIVE') => [{ userId, membershipType: 'WORKSPACE', membershipStatus: status, targetId: WS }];
+  return {
+    ids: { WS, U_OWNER, U_KIOSK, U_BULK, U_GONE, U_EXP_ONLY, U_DELETED, PROJ, EXP1: id('21', 1) },
+    freePlan: true, pageCap: 200, reportCap: 200,
+    me: null,
+    workspace: { id: WS, name, hourlyRate: { amount: 0, currency: 'BRL' }, costRate: { amount: 0, currency: 'BRL' }, currencies: [{ id: id('cc', 1), code: 'BRL', isDefault: true }], memberships: member(U_OWNER), workspaceSettings: { forceProjects: false }, features: [] },
+    users: [
+      { id: U_OWNER, email: ownerEmail, name: 'Owner', status: 'ACTIVE', settings: { timeZone: 'America/Sao_Paulo' }, memberships: member(U_OWNER), roles: [{ role: { id: id('ff', 1), name: 'OWNER' } }, { role: { id: id('ff', 2), name: 'WORKSPACE_ADMIN' } }], customFields: [] },
+      { id: U_KIOSK, email: null, name: 'Kiosk Kim', status: 'LIMITED', settings: {}, memberships: member(U_KIOSK), roles: [], customFields: [] },
+      { id: U_BULK, email: 'bulk-c@test.dev', name: 'Bulk Bia', status: 'ACTIVE', settings: { timeZone: 'UTC' }, memberships: member(U_BULK), roles: [], customFields: [] },
+      { id: U_DELETED, email: 'deleted-user@test.dev', name: 'Dora Deleted', status: 'DELETED', settings: {}, memberships: member(U_DELETED, 'INACTIVE'), roles: [], customFields: [] },
+    ],
+    removedUsers: [{ id: U_GONE, name: 'Gabriel Gone', email: 'gabriel-gone@test.dev' }],
+    groups: [], clients: [],
+    projects: [{ id: PROJ, name: 'Operação', workspaceId: WS, clientId: '', clientName: '', color: '#2196F3', billable: true, public: true, archived: false, template: false, note: '', hourlyRate: null, costRate: null, estimate: { estimate: 'PT0S', type: 'AUTO' }, memberships: [] }],
+    tasks: {}, tags: [], customFields: [], entries, categories: [],
+    expenses: [{ id: id('21', 1), workspaceId: WS, userId: U_EXP_ONLY, date: '2023-08-08', project: { id: PROJ, name: 'Operação' }, task: null, category: null, notes: 'Hotel', quantity: 1, total: 300, billable: false, locked: false }],
+    holidays: [], policies: [], balances: {}, timeOffRequests: [], approvals: [], assignments: [], invoices: [], invoiceDetails: {}, payments: {}, webhooks: [],
+  };
+}
+
 function startMockClockify(fixtures) {
-  const state = { requests: 0, tagsRateLimited: false, log: [] };
-  const paginate = (list, q) => {
+  const state = { requests: 0, tagsRateLimited: false, log: [], reports: [] };
+  // `cap` emulates a server that silently returns fewer items per page than requested
+  const paginate = (list, q, cap = Infinity) => {
     const page = Math.max(1, parseInt(q.get('page') || '1', 10));
-    const size = Math.max(1, parseInt(q.get('page-size') || q.get('pageSize') || '50', 10));
+    const size = Math.min(cap, Math.max(1, parseInt(q.get('page-size') || q.get('pageSize') || '50', 10)));
     return list.slice((page - 1) * size, page * size);
+  };
+  const seconds = (e) => Math.round((new Date(e.timeInterval.end) - new Date(e.timeInterval.start)) / 1000);
+  const detailedReport = (f, body) => {
+    const start = new Date(body.dateRangeStart); const end = new Date(body.dateRangeEnd);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || !body.detailedFilter) return [400, { message: 'dateRangeStart, dateRangeEnd and detailedFilter are required', code: 501 }];
+    if (f.freePlan && end - start > 31 * 86400000) return [400, { message: 'Detailed report data on FREE subscription plan is limited to a maximum interval length of one month (31 days).', code: 501 }];
+    const allUsers = body.users?.contains === 'DOES_NOT_CONTAIN' && !(body.users.ids || []).length && body.users.status === 'ALL';
+    const listed = new Set(f.users.map((u) => u.id));
+    const list = f.entries
+      .filter((e) => e.timeInterval.end && new Date(e.timeInterval.start) >= start && new Date(e.timeInterval.start) <= end)
+      .filter((e) => allUsers || listed.has(e.userId))
+      .sort((a, b) => new Date(a.timeInterval.start) - new Date(b.timeInterval.start));
+    const page = body.detailedFilter.page || 1;
+    const size = Math.min(f.reportCap || 1000, body.detailedFilter.pageSize || 50);
+    const person = (uid) => f.users.find((u) => u.id === uid) || (f.removedUsers || []).find((u) => u.id === uid) || {};
+    return [200, {
+      totals: body.detailedFilter.options?.totals === 'EXCLUDE' ? [] : [{ _id: '', totalTime: list.reduce((t, e) => t + seconds(e), 0), entriesCount: list.length }],
+      timeEntries: list.slice((page - 1) * size, page * size).map((e) => ({
+        _id: e.id, description: e.description, userId: e.userId, userName: person(e.userId).name || '', userEmail: person(e.userId).email || '',
+        billable: e.billable, projectId: e.projectId, taskId: e.taskId, tags: (e.tagIds || []).map((t) => ({ id: t, name: t })), type: e.type, isLocked: e.isLocked,
+        timeInterval: { start: e.timeInterval.start.replace('Z', '+00:00'), end: e.timeInterval.end.replace('Z', '+00:00'), duration: seconds(e) }, customFields: [],
+      })),
+    }];
   };
   const server = http.createServer((req, res) => {
     state.requests += 1;
@@ -93,6 +161,14 @@ function startMockClockify(fixtures) {
     req.on('data', (c) => bodyChunks.push(c));
     req.on('end', () => {
       const body = bodyChunks.length ? JSON.parse(Buffer.concat(bodyChunks).toString('utf8')) : {};
+      const report = /^\/report\/v1\/workspaces\/([a-f0-9]{24})\/reports\/detailed$/.exec(url.pathname);
+      if (report && req.method === 'POST') {
+        const f = fixtures.find((x) => x.ids.WS === report[1]);
+        if (!f) return send(403, { message: 'no access', code: 403 });
+        state.reports.push({ ws: report[1], body });
+        const [status, payload] = detailedReport(f, body);
+        return send(status, payload);
+      }
       const p = url.pathname.replace(/^\/api\/v1/, '');
       if (p === '/user') return send(200, fixtures[0].me);
       if (p === '/workspaces') return send(200, fixtures.map((f) => f.workspace));
@@ -103,7 +179,11 @@ function startMockClockify(fixtures) {
       const rest = m[2] || '';
       const bool = (v) => v === 'true';
       if (rest === '') return send(200, f.workspace);
-      if (rest === '/users') return send(200, paginate(f.users, q));
+      if (rest === '/users') {
+        // like Clockify: without account-statuses only ACTIVE, PENDING_EMAIL_VERIFICATION and NOT_REGISTERED accounts
+        const statuses = q.get('account-statuses') ? q.get('account-statuses').split(',') : ['ACTIVE', 'PENDING_EMAIL_VERIFICATION', 'NOT_REGISTERED'];
+        return send(200, paginate(f.users.filter((u) => statuses.includes(u.status || 'ACTIVE')), q));
+      }
       if (/^\/member-profile\//.test(rest)) return send(200, { weekStart: 'MONDAY', workingDays: ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY'], workCapacity: 'PT8H' });
       if (rest === '/user-groups') return send(200, paginate(f.groups, q));
       if (rest === '/clients') return send(200, paginate(f.clients.filter((c) => c.archived === bool(q.get('archived'))), q));
@@ -125,7 +205,7 @@ function startMockClockify(fixtures) {
           if (q.get('start')) list = list.filter((e) => new Date(e.timeInterval.start) >= new Date(q.get('start')));
           if (q.get('end')) list = list.filter((e) => new Date(e.timeInterval.start) < new Date(q.get('end')));
         }
-        return send(200, paginate(list, q));
+        return send(200, paginate(list, q, f.pageCap));
       }
       if (rest === '/expenses/categories') return send(200, { categories: paginate(f.categories.filter((c) => c.archived === bool(q.get('archived'))), q), count: f.categories.length });
       if (rest === '/expenses') { const list = f.expenses.filter((x) => !q.get('user-id') || x.userId === q.get('user-id')); return send(200, { expenses: { expenses: paginate(list, q), count: list.length }, dailyTotals: [], weeklyTotals: [] }); }
@@ -152,13 +232,14 @@ function startMockClockify(fixtures) {
 
 // ---------------------------------------------------------------------------------------------------------------
 
-let t; let owner; let mock; let A; let B;
+let t; let owner; let mock; let A; let B; let C;
 before(async () => {
   t = await setupTestApp('importer');
   owner = await t.register({ email: OWNER_EMAIL, name: 'Local Owner', workspaceName: 'Local WS' });
   A = buildFixture('a1', { ownerEmail: OWNER_EMAIL, name: 'Clockify WS A' });
   B = buildFixture('b2', { ownerEmail: OWNER_EMAIL, name: 'Clockify WS B' });
-  mock = await startMockClockify([A, B]);
+  C = buildRealisticFixture('c3', { ownerEmail: OWNER_EMAIL, ownerId: A.ids.U_OWNER, name: 'Clockify WS C (FREE)' });
+  mock = await startMockClockify([A, B, C]);
 });
 after(async () => {
   const { waitForRunningJobs } = await import('../src/modules/importer/service.js');
@@ -185,12 +266,15 @@ test('lists Clockify workspaces for an API key and rejects bad keys', async () =
   const ok = await owner.call('POST', `/api/v1/workspaces/${ws}/import/clockify/workspaces`, { apiKey: API_KEY, baseUrl: mock.baseUrl });
   assert.equal(ok.status, 200, ok.text);
   assert.ok(Array.isArray(ok.data));
-  assert.deepEqual(ok.data.map((w) => w.id), [A.ids.WS, B.ids.WS]);
+  assert.deepEqual(ok.data.map((w) => w.id), [A.ids.WS, B.ids.WS, C.ids.WS]);
   assert.equal(ok.data[0].name, 'Clockify WS A');
   assert.equal(ok.data[0].apiUser.email, OWNER_EMAIL);
+  assert.equal(ok.data[0].access, 'ADMIN', 'the key owner is WORKSPACE_ADMIN in A');
+  assert.equal(ok.data[2].access, 'ADMIN', 'roles in the { role: { name } } shape (OWNER)');
+  assert.equal(ok.data[0].apiEndpoint.baseUrl, mock.baseUrl);
   const viaGet = await owner.call('GET', `/api/v1/workspaces/${ws}/import/clockify/workspaces?apiKey=${API_KEY}&baseUrl=${encodeURIComponent(mock.baseUrl)}`);
   assert.equal(viaGet.status, 200, viaGet.text);
-  assert.equal(viaGet.data.length, 2);
+  assert.equal(viaGet.data.length, 3);
   const bad = await owner.call('POST', `/api/v1/workspaces/${ws}/import/clockify/workspaces`, { apiKey: 'wrong-key-1234', baseUrl: mock.baseUrl });
   assert.equal(bad.status, 400);
   const entities = await owner.call('GET', '/api/v1/import/entities');
@@ -442,6 +526,147 @@ test('a running import can be cancelled cooperatively', async () => {
   assert.equal(job.status, 'CANCELLED');
   assert.equal(job.progress.cancelled, true);
   assert.ok(job.log.some((l) => /cancelada/.test(l)));
+});
+
+test('keeps the history of limited, deleted and removed users and reconciles with the detailed report', async () => {
+  const ws = owner.workspaceId;
+  const start = () => owner.call('POST', `/api/v1/workspaces/${ws}/import/clockify`, { apiKey: API_KEY, baseUrl: mock.baseUrl, sourceWorkspaceId: C.ids.WS, mode: 'NEW_WORKSPACE', ratePerSecond: 100 });
+  const r = await start();
+  assert.equal(r.status, 202, r.text);
+  const job = await waitJob(owner.call, ws, r.data.jobId, 90000);
+  const log = job.log.join('\n');
+  assert.equal(job.status, 'DONE', log);
+  const P = job.progress;
+  assert.equal(P.sourceAccess, 'ADMIN');
+  const entriesOf = (uid) => count('SELECT count(*)::int AS c FROM time_entries WHERE workspace_id = $1 AND user_id = $2', [C.ids.WS, uid]);
+  const memberStatus = async (uid) => (await t.db.one('SELECT status FROM workspace_members WHERE workspace_id = $1 AND user_id = $2', [C.ids.WS, uid])).status;
+
+  // kiosk-only "limited" user without e-mail (absent from Clockify's default users listing)
+  const kiosk = await t.db.one('SELECT * FROM users WHERE id = $1', [C.ids.U_KIOSK]);
+  assert.equal(kiosk.email, `clockify-${C.ids.U_KIOSK}@sem-email.invalid`);
+  assert.equal(kiosk.status, 'NOT_REGISTERED');
+  assert.equal(kiosk.name, 'Kiosk Kim');
+  assert.equal(await memberStatus(C.ids.U_KIOSK), 'ACTIVE');
+  assert.equal(await entriesOf(C.ids.U_KIOSK), 2);
+
+  // deleted account: history kept under a placeholder address, the real e-mail stays free for a sign-up
+  const dora = await t.db.one('SELECT * FROM users WHERE id = $1', [C.ids.U_DELETED]);
+  assert.equal(dora.status, 'DELETED');
+  assert.match(dora.email, /@sem-email\.invalid$/);
+  assert.equal(await count("SELECT count(*)::int AS c FROM users WHERE lower(email) = 'deleted-user@test.dev'"), 0);
+  assert.equal(await memberStatus(C.ids.U_DELETED), 'INACTIVE');
+  assert.equal(await entriesOf(C.ids.U_DELETED), 1);
+
+  // removed from the workspace: only the detailed report still has their entries
+  const gabriel = await t.db.one('SELECT * FROM users WHERE id = $1', [C.ids.U_GONE]);
+  assert.equal(gabriel.email, 'gabriel-gone@test.dev');
+  assert.equal(gabriel.name, 'Gabriel Gone');
+  assert.equal(await memberStatus(C.ids.U_GONE), 'INACTIVE');
+  assert.equal(await entriesOf(C.ids.U_GONE), 3);
+  assert.ok(P.warnings.some((w) => /Gabriel Gone/.test(w)), P.warnings.join('\n'));
+
+  // more entries than the server's silent page-size cap (200 per page although 1000 were asked)
+  assert.equal(await entriesOf(C.ids.U_BULK), 450);
+  assert.match(log, /no máximo 200 itens por página/);
+
+  // expense of someone known only through that expense
+  const exp = await t.db.one('SELECT * FROM expenses WHERE id = $1', [C.ids.EXP1]);
+  assert.equal(exp.user_id, C.ids.U_EXP_ONLY);
+  assert.match((await t.db.one('SELECT email FROM users WHERE id = $1', [C.ids.U_EXP_ONLY])).email, /@sem-email\.invalid$/);
+
+  // reconciliation, user by user (FREE plan: yearly periods refused → 31-day periods)
+  const rec = P.reconciliation;
+  assert.ok(rec && !rec.error, JSON.stringify(rec));
+  assert.equal(rec.clockify.entries, C.entries.length);
+  assert.equal(rec.local.entries, C.entries.length);
+  assert.equal(rec.missing, 0);
+  assert.equal(rec.recovered, 3);
+  assert.equal(rec.windowDays, 31);
+  assert.equal(rec.allUsersFilter, true);
+  assert.ok(Math.abs(rec.clockify.seconds - rec.local.seconds) < 1);
+  const gone = rec.users.find((u) => u.userId === C.ids.U_GONE);
+  assert.deepEqual([gone.clockify.entries, gone.local.entries, gone.email], [3, 3, 'gabriel-gone@test.dev']);
+  assert.match(log, /31 dias/);
+  assert.match(log, /Conferência OK/);
+  assert.ok(mock.state.reports.some((x) => x.ws === C.ids.WS && x.body.users?.status === 'ALL'));
+
+  // running it again duplicates nothing
+  const r2 = await start();
+  assert.equal(r2.status, 202, r2.text);
+  const job2 = await waitJob(owner.call, ws, r2.data.jobId, 90000);
+  assert.equal(job2.status, 'DONE', job2.log.join('\n'));
+  assert.equal(job2.progress.reconciliation.missing, 0);
+  assert.equal(job2.progress.details.timeEntries.created, 0);
+  assert.equal(job2.progress.details.users.created, 0);
+  assert.equal(await count('SELECT count(*)::int AS c FROM time_entries WHERE workspace_id = $1', [C.ids.WS]), C.entries.length);
+});
+
+test('a dry run reports what Clockify has without writing', async () => {
+  const ws = owner.workspaceId;
+  const r = await owner.call('POST', `/api/v1/workspaces/${ws}/import/clockify`, { apiKey: API_KEY, baseUrl: mock.baseUrl, sourceWorkspaceId: A.ids.WS, dryRun: true, entities: ['users', 'timeEntries'], ratePerSecond: 100 });
+  assert.equal(r.status, 202, r.text);
+  const job = await waitJob(owner.call, ws, r.data.jobId);
+  assert.equal(job.status, 'DONE', job.log.join('\n'));
+  const rec = job.progress.reconciliation;
+  assert.equal(rec.clockify.entries, 4, 'the running timer is not in reports');
+  assert.equal(rec.local, null);
+  assert.equal(rec.missing, null);
+});
+
+test('importing an already imported Clockify workspace into another local workspace explains why nothing is copied', async () => {
+  const ws = owner.workspaceId;
+  const r = await owner.call('POST', `/api/v1/workspaces/${ws}/import/clockify`, { apiKey: API_KEY, baseUrl: mock.baseUrl, sourceWorkspaceId: A.ids.WS, mode: 'NEW_WORKSPACE', entities: ['workspace', 'users', 'projects', 'timeEntries'], ratePerSecond: 100 });
+  assert.equal(r.status, 202, r.text);
+  const job = await waitJob(owner.call, ws, r.data.jobId);
+  assert.equal(job.status, 'DONE', job.log.join('\n'));
+  const w = job.progress.warnings.join('\n');
+  assert.match(w, /já foi importado para o workspace local “Local WS”/);
+  assert.match(w, /2 projeto\(s\), 5 registro\(s\) de tempo deste workspace do Clockify já existem em outro workspace local \(“Local WS”/);
+  assert.equal(job.progress.reconciliation.missing, 4);
+  assert.ok(!job.log.some((l) => /pertence a outro workspace/.test(l)), 'no line per record');
+  assert.equal(await count('SELECT count(*)::int AS c FROM time_entries WHERE workspace_id = $1', [A.ids.WS]), 0);
+});
+
+test('only Clockify addresses are accepted as the source server', async () => {
+  const ws = owner.workspaceId;
+  for (const baseUrl of ['http://169.254.169.254/latest/meta-data', 'http://localhost:5432', 'https://clockify.me.evil.example']) {
+    const list = await owner.call('POST', `/api/v1/workspaces/${ws}/import/clockify/workspaces`, { apiKey: API_KEY, baseUrl });
+    assert.equal(list.status, 400, `${baseUrl}: ${list.text}`);
+    assert.match(list.text, /clockify\.me/);
+    const run = await owner.call('POST', `/api/v1/workspaces/${ws}/import/clockify`, { apiKey: API_KEY, baseUrl, sourceWorkspaceId: A.ids.WS });
+    assert.equal(run.status, 400, `${baseUrl}: ${run.text}`);
+  }
+  const reports = await owner.call('POST', `/api/v1/workspaces/${ws}/import/clockify`, { apiKey: API_KEY, baseUrl: mock.baseUrl, reportsUrl: 'http://10.0.0.1/report/v1', sourceWorkspaceId: A.ids.WS });
+  assert.equal(reports.status, 400, reports.text);
+  const region = await owner.call('POST', `/api/v1/workspaces/${ws}/import/clockify`, { apiKey: API_KEY, region: 'mars1', sourceWorkspaceId: A.ids.WS });
+  assert.equal(region.status, 400, region.text);
+});
+
+test('imports left running by a dead process are marked FAILED; live ones block a second import', async () => {
+  const ws = owner.workspaceId;
+  const { hostname } = await import('node:os');
+  const { randomBytes } = await import('node:crypto');
+  const insert = async (progress) => (await t.db.one(
+    `INSERT INTO import_jobs (id, workspace_id, user_id, source, status, options, progress, log, started_at) VALUES ($1,$2,$3,'CLOCKIFY_API','RUNNING','{}',$4,'[]', now() - interval '1 hour') RETURNING id`,
+    [randomBytes(12).toString('hex'), ws, owner.user.id, JSON.stringify(progress)],
+  )).id;
+  const now = new Date().toISOString();
+  const deadPid = await insert({ stage: 'timeEntries', runner: { pid: 2147483646, host: hostname() }, heartbeatAt: now });
+  const silent = await insert({ stage: 'users', runner: { pid: 1234, host: 'another-host' }, heartbeatAt: new Date(Date.now() - 10 * 60000).toISOString() });
+  const alive = await insert({ stage: 'projects', runner: { pid: 1234, host: 'another-host' }, heartbeatAt: now });
+  for (const id of [deadPid, silent]) {
+    const j = await owner.call('GET', `/api/v1/workspaces/${ws}/import/jobs/${id}`);
+    assert.equal(j.status, 200);
+    assert.equal(j.data.status, 'FAILED');
+    assert.equal(j.data.progress.interrupted, true);
+    assert.match(j.data.error, /Interrupted/);
+    assert.ok(j.data.log.some((l) => /interrompida/.test(l)));
+  }
+  const live = await owner.call('GET', `/api/v1/workspaces/${ws}/import/jobs/${alive}`);
+  assert.equal(live.data.status, 'RUNNING');
+  const busy = await owner.call('POST', `/api/v1/workspaces/${ws}/import/clockify`, { apiKey: API_KEY, baseUrl: mock.baseUrl, sourceWorkspaceId: A.ids.WS, ratePerSecond: 100 });
+  assert.equal(busy.status, 409, busy.text);
+  await t.db.query("UPDATE import_jobs SET status = 'FAILED', finished_at = now() WHERE id = $1", [alive]);
 });
 
 // ---------------------------------------------------------------------------------------------------------------

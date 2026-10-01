@@ -106,13 +106,17 @@ Webhooks entregam os mesmos eventos (`NEW_TIME_ENTRY`, `TIMER_STOPPED`, `NEW_PRO
 
 Veja o guia completo em [server/src/modules/importer/README.md](server/src/modules/importer/README.md). Em resumo:
 
-1. No Clockify, gere uma chave de API em *Profile settings › API*.
-2. No Clockfy, abra **Importar do Clockify**, informe a chave, escolha o workspace de origem, o modo (importar para o
-   workspace atual ou criar um novo com o mesmo ID) e execute. O progresso é exibido em tempo real; a importação é
-   idempotente e pode ser reexecutada com a opção “desde” para sincronizar registros novos.
+1. No Clockify, entre com a conta do proprietário ou de um administrador e gere uma chave em
+   *foto do perfil › Preferências › Avançado › Gerenciar chaves de API › Gerar nova*.
+2. No Clockfy, abra **Administração › Importar do Clockify**, cole a chave (o servidor – global, região de dados ou
+   subdomínio – é detectado), escolha o workspace de origem e o modo (importar para o workspace atual ou criar um novo
+   com o mesmo ID) e execute. O progresso é exibido em tempo real. No fim, a **conferência com o relatório detalhado**
+   compara pessoa a pessoa registros e horas do Clockify com o que foi importado e recupera o histórico de quem já saiu
+   do workspace. A importação é idempotente e pode ser reexecutada com a opção “desde” para sincronizar registros novos.
 3. Alternativa sem chave: exporte o *Relatório detalhado* em CSV no Clockify e importe em **Importar do Clockify › CSV**.
 
-Também há uma CLI: `npm run import:clockify -- --api-key ... --source-workspace ... --owner-email ... --new-workspace`.
+Também há uma CLI: `npm run import:clockify -- --api-key ... --source-workspace ... --owner-email ... --new-workspace`
+(`--list-workspaces` lista os workspaces da chave e se você é administrador de cada um).
 
 ## Variáveis de ambiente
 
@@ -127,6 +131,7 @@ Também há uma CLI: `npm run import:clockify -- --api-key ... --source-workspac
 | `RATE_LIMIT_PER_SECOND` | `50` | limite por usuário/chave |
 | `SCHEDULER_ENABLED` | `true` | jobs periódicos (webhooks, lembretes, bloqueio automático, acúmulo de folgas…) |
 | `MAX_UPLOAD_BYTES` | `10485760` | tamanho máximo de recibos/imagens |
+| `CLOCKIFY_IMPORT_ALLOWED_HOSTS` | – | hosts extras (além de `https://*.clockify.me`) aceitos como servidor de origem do importador, p.ex. um espelho da API |
 
 ## Licença
 
