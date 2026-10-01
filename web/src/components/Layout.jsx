@@ -32,13 +32,26 @@ const NAV = [
     { to: '/alerts', label: 'Alertas e lembretes', ico: '🔔' },
     { to: '/audit-log', label: 'Log de auditoria', ico: '📜' },
     { to: '/import', label: 'Importar do Clockify', ico: '⇩' },
+    { to: '/accounts', label: 'Contas de usuário', ico: '🛡', system: true },
   ] },
 ];
 
 export default function Layout() {
-  const { user, workspace, workspaces, settings, isAdmin, logout, switchWorkspace, toast } = useStore();
+  const { user, workspace, workspaces, settings, isAdmin, isSystemAdmin, logout, switchWorkspace, toast } = useStore();
   const [open, setOpen] = useState(false);
   const [unread, setUnread] = useState(0);
+  const [pendingAccounts, setPendingAccounts] = useState(0);
+
+  // system administrators see how many sign-ups wait for approval
+  useEffect(() => {
+    if (!isSystemAdmin) { setPendingAccounts(0); return undefined; }
+    let alive = true;
+    const load = () => api.get('/admin/accounts/summary').then((r) => alive && setPendingAccounts(r.pending)).catch(() => {});
+    load();
+    const id = setInterval(load, 60000);
+    window.addEventListener('clockfy:accounts-changed', load);
+    return () => { alive = false; clearInterval(id); window.removeEventListener('clockfy:accounts-changed', load); };
+  }, [isSystemAdmin]);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -51,6 +64,8 @@ export default function Layout() {
 
   const adminPages = new Set(settings.adminOnlyPages || []);
   const visible = (item) => {
+    if (item.system) return isSystemAdmin;
+    if (!isAdmin && NAV.some((sec) => sec.admin && sec.items.includes(item))) return false;
     if (item.admin && !isAdmin) return false;
     if (item.feature && settings[item.feature] === false) return false;
     if (!isAdmin) {
@@ -95,10 +110,15 @@ export default function Layout() {
         </div>
       </header>
       <nav className={`sidebar ${open ? 'open' : ''}`} onClick={() => setOpen(false)}>
-        {NAV.filter((s) => !s.admin || isAdmin).map((s) => (
+        {NAV.filter((s) => s.items.some(visible)).map((s) => (
           <div key={s.section}>
             <div className="section">{s.section}</div>
-            {s.items.filter(visible).map((i) => <NavLink key={i.to} to={i.to} className={({ isActive }) => `item ${isActive ? 'active' : ''}`}><span className="ico">{i.ico}</span>{i.label}</NavLink>)}
+            {s.items.filter(visible).map((i) => (
+              <NavLink key={i.to} to={i.to} className={({ isActive }) => `item ${isActive ? 'active' : ''}`}>
+                <span className="ico">{i.ico}</span>{i.label}
+                {i.to === '/accounts' && pendingAccounts > 0 && <span className="badge warning ml" title="Cadastros aguardando aprovação">{pendingAccounts}</span>}
+              </NavLink>
+            ))}
           </div>
         ))}
       </nav>

@@ -125,6 +125,8 @@ SMTP_FROM="Clockfy <no-reply@${DOMAIN:-localhost}>"
 RATE_LIMIT_PER_SECOND=50
 SCHEDULER_ENABLED=true
 MAX_UPLOAD_BYTES=10485760
+# Novas contas criadas em "Criar conta" só entram depois de aprovadas por um administrador do sistema
+REGISTRATION_APPROVAL=true
 ENV
   chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE"; chmod 600 "$ENV_FILE"
   ok ".env criado"

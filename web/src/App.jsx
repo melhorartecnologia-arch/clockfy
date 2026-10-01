@@ -49,6 +49,7 @@ export default function App() {
           <Route path="/alerts" element={<P.Alerts />} />
           <Route path="/audit-log" element={<P.AuditLog />} />
           <Route path="/import" element={<P.Import />} />
+          <Route path="/accounts" element={<P.Accounts />} />
           <Route path="/notifications" element={<P.Notifications />} />
           <Route path="*" element={<Navigate to="/tracker" replace />} />
         </Route>

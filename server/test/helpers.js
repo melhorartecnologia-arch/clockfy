@@ -14,6 +14,10 @@ export async function setupTestApp(name) {
   process.env.DATABASE_URL = ADMIN_URL.replace(/\/[^/]*$/, `/${dbName}`);
   process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret';
   process.env.SCHEDULER_ENABLED = 'false';
+  // open sign-up unless a test file turns approvals on (test/accounts.test.js)
+  if (process.env.REGISTRATION_APPROVAL === undefined) process.env.REGISTRATION_APPROVAL = 'false';
+  // tests create many accounts from 127.0.0.1
+  if (process.env.SIGNUP_LIMIT_PER_HOUR === undefined) process.env.SIGNUP_LIMIT_PER_HOUR = '100000';
   process.env.NODE_ENV = 'test';
   const { migrate } = await import('../src/lib/migrate.js');
   await migrate({ log: () => {} });
@@ -35,9 +39,23 @@ export async function setupTestApp(name) {
   };
 
   async function register({ email, password = 'secret123', name, workspaceName, timeZone } = {}) {
-    const r = await api()('POST', '/api/v1/auth/register', { email: email || `user${Date.now()}${Math.random().toString(36).slice(2, 6)}@test.dev`, password, name, workspaceName, timeZone });
+    const address = email || `user${Date.now()}${Math.random().toString(36).slice(2, 6)}@test.dev`;
+    const r = await api()('POST', '/api/v1/auth/register', { email: address, password, name, workspaceName, timeZone });
+    if (r.status === 409 && r.data?.code === 1010) return joinInvited({ email: address, password, name, timeZone });
     if (r.status !== 201) throw new Error(`register failed: ${r.status} ${r.text}`);
     return { token: r.data.token, user: r.data.user, workspaceId: r.data.user.activeWorkspace, call: api(r.data.token) };
+  }
+
+  // An invited (or imported) person proves the e-mail with the reset link, as in the app ("Esqueci minha senha").
+  async function joinInvited({ email, password = 'secret123', name, timeZone }) {
+    const forgot = await api()('POST', '/api/v1/auth/forgot-password', { email });
+    const reset = await api()('POST', '/api/v1/auth/reset-password', { token: forgot.data.token, password });
+    if (reset.status !== 200) throw new Error(`join failed: ${reset.status} ${reset.text}`);
+    const call = api(reset.data.token);
+    if (name) await call('PUT', '/api/v1/user', { name });
+    if (timeZone) await call('PUT', '/api/v1/user/settings', { timeZone });
+    const me = await call('GET', '/api/v1/user');
+    return { token: reset.data.token, user: me.data, workspaceId: me.data.activeWorkspace, call };
   }
 
   async function close() {
@@ -45,7 +63,7 @@ export async function setupTestApp(name) {
     await db.close();
   }
 
-  return { app, server, base, api, register, close, db };
+  return { app, server, base, api, register, joinInvited, close, db };
 }
 
 export function iso(d) { return new Date(d).toISOString(); }

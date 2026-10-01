@@ -19,7 +19,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: con
 
 // Current user --------------------------------------------------------------
 router.get('/user', async (req, res) => {
-  res.json(await getUserDto(req.user.id, { includeMemberships: bool(req.query['include-memberships'], true) }));
+  res.json({ ...(await getUserDto(req.user.id, { includeMemberships: bool(req.query['include-memberships'], true) })), systemAdmin: !!req.user.is_super_admin });
 });
 
 const userPatch = z.object({

@@ -37,6 +37,9 @@ export async function resolveUser(req) {
     return null;
   }
   if (user.status === 'DELETED') throw unauthorized('Account deleted', 1000);
+  // sign-ups waiting for approval (or rejected) have no access, even with a token issued before
+  if (user.status === 'PENDING_APPROVAL') throw unauthorized('Account waiting for administrator approval', 1011);
+  if (user.status === 'REJECTED') throw unauthorized('Account not approved', 1012);
   return user;
 }
 

@@ -24,6 +24,10 @@ export const config = {
   schedulerEnabled: env.SCHEDULER_ENABLED !== 'false',
   webhookTimeoutMs: Number(env.WEBHOOK_TIMEOUT_MS || 10000),
   logSql: env.LOG_SQL === 'true',
+  // Accounts created by the public sign-up page must be approved by a system administrator before signing in.
+  registrationApproval: env.REGISTRATION_APPROVAL !== 'false',
+  // Sign-up attempts per client address per hour (protects the approval queue and the administrators' inbox)
+  signupLimitPerHour: Number(env.SIGNUP_LIMIT_PER_HOUR || 10),
   // Extra hosts (host or host:port) the Clockify importer may call besides https://*.clockify.me – e.g. a mirror.
   clockifyImportAllowedHosts: String(env.CLOCKIFY_IMPORT_ALLOWED_HOSTS || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean),
 };

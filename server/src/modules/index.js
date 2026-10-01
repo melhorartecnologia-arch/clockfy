@@ -12,5 +12,6 @@ import alerts from './alerts/index.js';
 import kiosk from './kiosk/index.js';
 import importer from './importer/index.js';
 import audit from './audit/index.js';
+import accounts from './accounts/index.js';
 
-export const extraModules = [reports, approvals, timeOff, holidays, scheduling, expenses, invoices, webhooks, alerts, kiosk, importer, audit].filter(Boolean);
+export const extraModules = [reports, approvals, timeOff, holidays, scheduling, expenses, invoices, webhooks, alerts, kiosk, importer, audit, accounts].filter(Boolean);

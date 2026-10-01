@@ -15,15 +15,21 @@ export default function Invite() {
   const [error, setError] = useState(null);
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
+  const [notice, setNotice] = useState(null);
   useEffect(() => { api.get(`/auth/invite/${token}`).then((i) => { setInfo(i); setName(i.name || ''); }).catch((e) => setError(errorMessage(e))); }, [token]);
   async function submit(e) {
     e.preventDefault(); setError(null);
-    try { const r = await api.post('/auth/accept-invite', { token, name, password }); await acceptSession(r.token); nav('/tracker'); } catch (err) { setError(errorMessage(err)); }
+    try {
+      const r = await api.post('/auth/accept-invite', { token, name, password });
+      if (!r?.token) { setInfo(null); setError(null); setNotice(r?.message || 'Sua conta ainda não pode entrar.'); return; } // sign-up waiting for approval
+      await acceptSession(r.token); nav('/tracker');
+    } catch (err) { setError(errorMessage(err)); }
   }
   return (
     <AuthShell title="Aceitar convite">
       <Alert type="error">{error}</Alert>
-      {!info && !error && <Spinner block />}
+      <Alert type="warning">{notice}</Alert>
+      {!info && !error && !notice && <Spinner block />}
       {info && (
         <form onSubmit={submit}>
           <p>Você foi convidado para o workspace <b>{info.workspaceName}</b> como <b>{info.email}</b>. Defina seu nome e senha para entrar.</p>

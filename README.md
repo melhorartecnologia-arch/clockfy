@@ -118,6 +118,24 @@ Veja o guia completo em [server/src/modules/importer/README.md](server/src/modul
 Também há uma CLI: `npm run import:clockify -- --api-key ... --source-workspace ... --owner-email ... --new-workspace`
 (`--list-workspaces` lista os workspaces da chave e se você é administrador de cada um).
 
+## Aprovação de novas contas
+
+Por segurança, uma conta criada pela página **Criar conta** fica com o status *aguardando aprovação* e não consegue
+entrar até que um **administrador do sistema** a aprove em **Administração › Contas de usuário** (a página mostra quantos
+cadastros esperam, e os administradores recebem notificação e e-mail a cada novo cadastro).
+
+- Ao aprovar, escolha se a pessoa entra em um workspace existente (ex.: o da empresa) ou ganha um workspace próprio. Ela
+  recebe um e-mail avisando. Cadastros recusados não entram; podem ser aprovados depois ou excluídos (liberando o e-mail).
+- A primeira conta de uma instalação nova é aprovada automaticamente e vira administradora do sistema. Em instalações que
+  já tinham contas, a conta mais antiga vira administradora ao iniciar o servidor. Outros administradores são definidos
+  na mesma página (sempre resta ao menos um).
+- Pessoas **convidadas** por um administrador de workspace ou **importadas do Clockify** não passam pela fila: definem a
+  senha pelo link do convite ou por “Esqueci minha senha”. O cadastro público nunca assume uma dessas contas (antes,
+  quem soubesse o e-mail de um convidado conseguia tomar a conta dele).
+- Pela linha de comando, no servidor: `npm run accounts -- --list`, `--approve EMAIL [--workspace ID]`,
+  `--reject EMAIL`, `--admins`, `--add-admin EMAIL`, `--remove-admin EMAIL`.
+- Para cadastro aberto (sem aprovação) use `REGISTRATION_APPROVAL=false`.
+
 ## Variáveis de ambiente
 
 | Variável | Padrão | Descrição |
@@ -131,6 +149,8 @@ Também há uma CLI: `npm run import:clockify -- --api-key ... --source-workspac
 | `RATE_LIMIT_PER_SECOND` | `50` | limite por usuário/chave |
 | `SCHEDULER_ENABLED` | `true` | jobs periódicos (webhooks, lembretes, bloqueio automático, acúmulo de folgas…) |
 | `MAX_UPLOAD_BYTES` | `10485760` | tamanho máximo de recibos/imagens |
+| `REGISTRATION_APPROVAL` | `true` | contas criadas em “Criar conta” aguardam aprovação de um administrador do sistema |
+| `SIGNUP_LIMIT_PER_HOUR` | `10` | tentativas de cadastro por endereço IP por hora (protege a fila de aprovação e o e-mail dos administradores) |
 | `CLOCKIFY_IMPORT_ALLOWED_HOSTS` | – | hosts extras (além de `https://*.clockify.me`) aceitos como servidor de origem do importador, p.ex. um espelho da API |
 
 ## Licença

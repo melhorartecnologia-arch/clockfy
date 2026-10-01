@@ -9,7 +9,9 @@ import { registerRoutes } from './routes.js';
 export function createApp() {
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', true);
+  // X-Forwarded-For only from a reverse proxy on this host or a private network (Nginx, Docker); a client reaching the
+  // app directly cannot forge its address (used in sign-up throttling and records)
+  app.set('trust proxy', 'loopback, linklocal, uniquelocal');
   app.use(cors({ origin: true, credentials: true, exposedHeaders: ['Content-Disposition'] }));
   app.use(express.json({ limit: '20mb' }));
   app.use(express.urlencoded({ extended: true }));

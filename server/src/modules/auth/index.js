@@ -11,6 +11,7 @@ import { createWorkspace } from '../workspaces/service.js';
 import { getUserDto } from '../users/service.js';
 import { DEFAULT_USER_SETTINGS } from '../../lib/settings.js';
 import { isValidTimeZone } from '../../lib/dates.js';
+import { ACTIVATABLE, CODE_EMAIL_INVITED, PENDING, isFirstAccount, notifyAdminsOfSignup, signInBlock } from '../accounts/service.js';
 
 export const router = Router();
 
@@ -25,29 +26,67 @@ const registerSchema = z.object({
 
 async function issue(user) {
   const token = signToken({ sub: user.id, email: user.email });
-  return { token, user: await getUserDto(user.id) };
+  return { token, user: { ...(await getUserDto(user.id)), systemAdmin: !!user.is_super_admin } };
+}
+
+// Answer for a password set (reset / invitation) on an account that still may not sign in: no session is issued.
+function blockedAnswer(res, user) {
+  const block = signInBlock(user);
+  if (!block) return false;
+  res.status(202).json({ ok: true, status: user.status, message: block.message, code: block.code });
+  return true;
+}
+
+// Public: tells the sign-up page whether new accounts wait for an administrator.
+router.get('/signup-info', (req, res) => res.json({ approvalRequired: config.registrationApproval }));
+
+// Sign-up attempts per client address (sliding window of one hour)
+const signupAttempts = new Map();
+export function allowSignup(key, { max = config.signupLimitPerHour, windowMs = 3600e3, now = Date.now() } = {}) {
+  const recent = (signupAttempts.get(key) || []).filter((t) => now - t < windowMs);
+  const allowed = recent.length < max;
+  if (allowed) recent.push(now);
+  signupAttempts.set(key, recent);
+  if (signupAttempts.size > 10000) signupAttempts.clear();
+  return allowed;
 }
 
 router.post('/register', async (req, res) => {
+  if (!allowSignup(req.ip || 'unknown')) {
+    res.set('Retry-After', '3600');
+    res.status(429).json({ message: 'Muitas tentativas de cadastro a partir deste endereço. Tente novamente mais tarde.', code: 429 });
+    return;
+  }
   const body = parse(registerSchema, req.body);
   const email = body.email.toLowerCase();
   const existing = await one('SELECT * FROM users WHERE lower(email) = $1', [email]);
-  if (existing && existing.password_hash) throw conflict('Email already registered', 409);
+  if (existing) {
+    // An account created by an administrator (workspace invitation, Clockify import) is never taken over by a sign-up:
+    // its owner proves the e-mail through the invitation link or "forgot password".
+    if (!existing.password_hash && ['PENDING_EMAIL_VERIFICATION', 'NOT_REGISTERED'].includes(existing.status)) {
+      throw conflict('Este e-mail já tem uma conta criada por um administrador (convite ou importação do Clockify). Para definir a sua senha use “Esqueci minha senha”: enviaremos um link para este e-mail.', CODE_EMAIL_INVITED);
+    }
+    throw conflict('Email already registered', 409);
+  }
   const settings = { ...DEFAULT_USER_SETTINGS, timeZone: body.timeZone && isValidTimeZone(body.timeZone) ? body.timeZone : 'UTC', lang: body.lang || 'PT_BR' };
+  const name = body.name || email.split('@')[0];
+  const passwordHash = await hashPassword(body.password);
+  const approval = config.registrationApproval;
+  const first = approval && await isFirstAccount();
+
+  if (approval && !first) {
+    // waits for a system administrator; the workspace is created (or chosen) on approval
+    const signup = { workspaceName: body.workspaceName || null, timeZone: settings.timeZone, requestedAt: new Date().toISOString(), ip: req.ip || null, userAgent: String(req.get('user-agent') || '').slice(0, 300) || null };
+    const u = await insert('users', { id: newId(), email, password_hash: passwordHash, name, status: PENDING, settings, signup });
+    await notifyAdminsOfSignup(u).catch((err) => console.error('[accounts] admin notification failed', err.message));
+    res.status(202).json({ status: PENDING, email: u.email, message: 'Cadastro recebido! Um administrador precisa aprovar a sua conta antes do primeiro acesso. Você receberá um e-mail quando ela for aprovada.' });
+    return;
+  }
+
   const user = await transaction(async () => {
-    let u;
-    if (existing) {
-      // invited placeholder account completes registration
-      u = await one('UPDATE users SET password_hash = $2, name = $3, status = $4, settings = $5 WHERE id = $1 RETURNING *',
-        [existing.id, await hashPassword(body.password), body.name || existing.name, 'ACTIVE', JSON.stringify(settings)]);
-      await query("UPDATE workspace_members SET status = 'ACTIVE' WHERE user_id = $1 AND status = 'PENDING'", [u.id]);
-    } else {
-      u = await insert('users', { id: newId(), email, password_hash: await hashPassword(body.password), name: body.name || email.split('@')[0], status: 'ACTIVE', settings });
-    }
-    if (!u.active_workspace_id) {
-      const ws = await createWorkspace({ name: body.workspaceName || `${u.name}'s workspace`, owner: u });
-      u = await one('UPDATE users SET active_workspace_id = $2, default_workspace_id = $2 WHERE id = $1 RETURNING *', [u.id, ws.id]);
-    }
+    let u = await insert('users', { id: newId(), email, password_hash: passwordHash, name, status: 'ACTIVE', settings, ...(first ? { is_super_admin: true, approved_at: new Date() } : {}) });
+    const ws = await createWorkspace({ name: body.workspaceName || `${u.name}'s workspace`, owner: u });
+    u = await one('UPDATE users SET active_workspace_id = $2, default_workspace_id = $2 WHERE id = $1 RETURNING *', [u.id, ws.id]);
     return u;
   });
   res.status(201).json(await issue(user));
@@ -58,13 +97,15 @@ router.post('/login', async (req, res) => {
   const user = await one('SELECT * FROM users WHERE lower(email) = $1', [email.toLowerCase()]);
   if (!user || !(await verifyPassword(password, user.password_hash))) throw unauthorized('Invalid email or password', 1001);
   if (user.status === 'DELETED') throw unauthorized('Account deleted', 1001);
+  const block = signInBlock(user);
+  if (block) throw block;
   res.json(await issue(user));
 });
 
 router.post('/logout', (req, res) => res.status(204).end());
 
 router.get('/me', authenticate, async (req, res) => {
-  res.json(await getUserDto(req.user.id));
+  res.json({ ...(await getUserDto(req.user.id)), systemAdmin: !!req.user.is_super_admin });
 });
 
 router.post('/refresh', authenticate, async (req, res) => {
@@ -89,9 +130,15 @@ router.post('/reset-password', async (req, res) => {
   const { token, password } = parse(z.object({ token: z.string(), password: z.string().min(6) }), req.body);
   const t = await one("SELECT * FROM user_tokens WHERE token_hash = $1 AND type = 'PASSWORD_RESET' AND used_at IS NULL AND expires_at > now()", [sha256(token)]);
   if (!t) throw badRequest('Invalid or expired token', 400);
-  await query('UPDATE users SET password_hash = $2, status = $3 WHERE id = $1', [t.user_id, await hashPassword(password), 'ACTIVE']);
+  // only accounts created by an administrator become ACTIVE here – a reset never approves a pending sign-up
+  const before = await one('SELECT status FROM users WHERE id = $1', [t.user_id]);
+  const user = await one('UPDATE users SET password_hash = $2, status = CASE WHEN status = ANY($3) THEN \'ACTIVE\' ELSE status END WHERE id = $1 RETURNING *',
+    [t.user_id, await hashPassword(password), ACTIVATABLE]);
   await query('UPDATE user_tokens SET used_at = now() WHERE id = $1', [t.id]);
-  const user = await one('SELECT * FROM users WHERE id = $1', [t.user_id]);
+  // the e-mail is proven: pending invitations of an account created by an administrator are accepted
+  if (before && before.status !== 'ACTIVE' && user.status === 'ACTIVE') await query("UPDATE workspace_members SET status = 'ACTIVE', joined_at = COALESCE(joined_at, now()) WHERE user_id = $1 AND status = 'PENDING'", [user.id]);
+  if (user.status === 'DELETED') throw unauthorized('Account deleted', 1001);
+  if (blockedAnswer(res, user)) return;
   res.json(await issue(user));
 });
 
@@ -106,12 +153,15 @@ router.post('/accept-invite', async (req, res) => {
   const t = await one("SELECT * FROM user_tokens WHERE token_hash = $1 AND type = 'INVITE' AND used_at IS NULL AND expires_at > now()", [sha256(token)]);
   if (!t) throw badRequest('Invalid or expired invitation', 400);
   const user = await transaction(async () => {
-    const u = await one('UPDATE users SET password_hash = $2, name = COALESCE($3, name), status = $4, active_workspace_id = COALESCE(active_workspace_id, $5), default_workspace_id = COALESCE(default_workspace_id, $5) WHERE id = $1 RETURNING *',
-      [t.user_id, await hashPassword(password), name || null, 'ACTIVE', t.meta.workspaceId || null]);
+    // an invitation activates accounts created by an administrator; it never approves a pending sign-up
+    const u = await one('UPDATE users SET password_hash = $2, name = COALESCE($3, name), status = CASE WHEN status = ANY($4) THEN \'ACTIVE\' ELSE status END, active_workspace_id = COALESCE(active_workspace_id, $5), default_workspace_id = COALESCE(default_workspace_id, $5) WHERE id = $1 RETURNING *',
+      [t.user_id, await hashPassword(password), name || null, ACTIVATABLE, t.meta.workspaceId || null]);
     await query("UPDATE workspace_members SET status = 'ACTIVE', joined_at = now() WHERE user_id = $1 AND workspace_id = $2", [u.id, t.meta.workspaceId]);
     await query('UPDATE user_tokens SET used_at = now() WHERE id = $1', [t.id]);
     return u;
   });
+  if (user.status === 'DELETED') throw unauthorized('Account deleted', 1001);
+  if (blockedAnswer(res, user)) return;
   res.json(await issue(user));
 });
 

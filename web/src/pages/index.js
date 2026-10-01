@@ -32,4 +32,5 @@ export const Webhooks = lazy(() => import('./Webhooks.jsx'));
 export const Alerts = lazy(() => import('./Alerts.jsx'));
 export const AuditLog = lazy(() => import('./AuditLog.jsx'));
 export const Import = lazy(() => import('./Import.jsx'));
+export const Accounts = lazy(() => import('./Accounts.jsx'));
 export const Notifications = lazy(() => import('./Notifications.jsx'));

@@ -46,6 +46,7 @@ export function StoreProvider({ children }) {
 
   const register = useCallback(async (data) => {
     const r = await endpoints.register(data);
+    if (!r?.token) return r; // sign-up waiting for an administrator's approval: no session yet
     setToken(r.token); setLoading(true);
     await loadSession();
     return r;
@@ -78,7 +79,7 @@ export function StoreProvider({ children }) {
     const isOwner = workspace && user && workspace.ownerId === user.id;
     return {
       user, workspaces, workspace, settings, userSettings, membership, loading, toasts, toast,
-      isOwner, isAdmin: !!(isOwner || user?.isAdmin || roles.some((r) => r.role === 'WORKSPACE_ADMIN')),
+      isOwner, isAdmin: !!(isOwner || user?.isAdmin || roles.some((r) => r.role === 'WORKSPACE_ADMIN')), isSystemAdmin: !!user?.systemAdmin,
       login, register, logout, switchWorkspace, refreshWorkspace, refreshUser, acceptSession, setWorkspaces,
       timeZone: userSettings.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone,
       weekStart: userSettings.weekStart || 'MONDAY',

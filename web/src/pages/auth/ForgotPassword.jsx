@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import AuthShell from './AuthShell.jsx';
 import { api } from '../../api.js';
 import { Alert } from '../../components/ui.jsx';
 import { errorMessage } from '../../lib/format.js';
 
 export default function ForgotPassword() {
-  const [email, setEmail] = useState('');
+  const [params] = useSearchParams();
+  const [email, setEmail] = useState(params.get('email') || '');
   const [done, setDone] = useState(null);
   const [error, setError] = useState(null);
   async function submit(e) {
