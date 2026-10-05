@@ -112,18 +112,30 @@ router.post('/refresh', authenticate, async (req, res) => {
   res.json(await issue(req.user));
 });
 
+// One reset e-mail per account per interval: repeated clicks, several tabs or a script asking again get the same answer
+// but no new e-mail (the link already sent stays valid for an hour).
+const RESET_EMAIL_INTERVAL_SECONDS = 60;
+
 router.post('/forgot-password', async (req, res) => {
   const { email } = parse(z.object({ email: z.string().email() }), req.body);
   const user = await one('SELECT * FROM users WHERE lower(email) = $1', [email.toLowerCase()]);
-  if (user) {
-    const raw = randomToken();
-    await insert('user_tokens', { id: newId(), user_id: user.id, type: 'PASSWORD_RESET', token_hash: sha256(raw), expires_at: new Date(Date.now() + 3600e3) });
+  if (!user) return res.json({ ok: true });
+  const raw = await transaction(async () => {
+    // the row lock makes simultaneous requests for the same account wait for each other, so only one sends
+    await query('SELECT 1 FROM users WHERE id = $1 FOR UPDATE', [user.id]);
+    const recent = await one("SELECT 1 FROM user_tokens WHERE user_id = $1 AND type = 'PASSWORD_RESET' AND created_at > now() - make_interval(secs => $2)",
+      [user.id, RESET_EMAIL_INTERVAL_SECONDS]);
+    if (recent) return null;
+    const token = randomToken();
+    await insert('user_tokens', { id: newId(), user_id: user.id, type: 'PASSWORD_RESET', token_hash: sha256(token), expires_at: new Date(Date.now() + 3600e3) });
+    return token;
+  });
+  if (raw) {
     const link = `${config.appUrl}/reset-password?token=${raw}`;
-    await sendMail({ to: user.email, subject: 'Redefinir senha - Clockfy', text: `Para redefinir sua senha acesse: ${link}` });
-    res.json({ ok: true, ...(config.env !== 'production' ? { token: raw } : {}) });
-    return;
+    // answered without waiting for the SMTP server: a slow server made people click again
+    sendMail({ to: user.email, subject: 'Redefinir senha - Clockfy', text: `Para redefinir sua senha acesse: ${link}` }).catch(() => {});
   }
-  res.json({ ok: true });
+  res.json({ ok: true, ...(raw && config.env !== 'production' ? { token: raw } : {}) });
 });
 
 router.post('/reset-password', async (req, res) => {

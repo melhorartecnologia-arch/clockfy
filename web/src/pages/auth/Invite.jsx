@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import AuthShell from './AuthShell.jsx';
 import { api } from '../../api.js';
@@ -16,14 +16,18 @@ export default function Invite() {
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [notice, setNotice] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const sending = useRef(false); // the invitation works once: a second click would answer "invalid token"
   useEffect(() => { api.get(`/auth/invite/${token}`).then((i) => { setInfo(i); setName(i.name || ''); }).catch((e) => setError(errorMessage(e))); }, [token]);
   async function submit(e) {
-    e.preventDefault(); setError(null);
+    e.preventDefault();
+    if (sending.current) return;
+    sending.current = true; setBusy(true); setError(null);
     try {
       const r = await api.post('/auth/accept-invite', { token, name, password });
       if (!r?.token) { setInfo(null); setError(null); setNotice(r?.message || 'Sua conta ainda não pode entrar.'); return; } // sign-up waiting for approval
       await acceptSession(r.token); nav('/tracker');
-    } catch (err) { setError(errorMessage(err)); }
+    } catch (err) { setError(errorMessage(err)); } finally { sending.current = false; setBusy(false); }
   }
   return (
     <AuthShell title="Aceitar convite">
@@ -35,7 +39,7 @@ export default function Invite() {
           <p>Você foi convidado para o workspace <b>{info.workspaceName}</b> como <b>{info.email}</b>. Defina seu nome e senha para entrar.</p>
           <div className="field"><label>Nome</label><input value={name} onChange={(e) => setName(e.target.value)} required /></div>
           <div className="field"><label>Senha</label><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={6} required /></div>
-          <button className="btn lg" style={{ width: '100%' }}>Entrar no workspace</button>
+          <button className="btn lg" style={{ width: '100%' }} disabled={busy}>{busy ? <><span className="spinner btn-spinner" /> Entrando…</> : 'Entrar no workspace'}</button>
         </form>
       )}
     </AuthShell>

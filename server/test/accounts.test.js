@@ -202,3 +202,40 @@ test('sign-up attempts are limited per client address', async () => {
   assert.equal(r.status, 202, r.text);
   assert.equal((await userRow('xff@test.dev')).signup.ip, '203.0.113.50');
 });
+
+test('"Esqueci minha senha" sends one e-mail per account per minute, even with repeated clicks', async () => {
+  const forgot = (email) => t.api()('POST', '/api/v1/auth/forgot-password', { email });
+  const resetMails = () => mailsTo('boss@test.dev').filter((m) => /Redefinir senha/.test(m.subject)).length;
+  const tokens = () => t.db.one("SELECT count(*)::int AS c FROM user_tokens k JOIN users u ON u.id = k.user_id WHERE lower(u.email) = 'boss@test.dev' AND k.type = 'PASSWORD_RESET'");
+  const mailsBefore = resetMails();
+
+  // four clicks at the same time: one link, one e-mail, the same answer for every click
+  const clicks = await Promise.all([1, 2, 3, 4].map(() => forgot('Boss@test.dev')));
+  assert.ok(clicks.every((r) => r.status === 200 && r.data.ok === true), clicks.map((r) => r.text).join('\n'));
+  assert.equal(clicks.filter((r) => r.data.token).length, 1);
+  assert.equal((await tokens()).c, 1);
+  assert.equal(resetMails() - mailsBefore, 1);
+
+  // another click within the minute: nothing new
+  const again = await forgot('boss@test.dev');
+  assert.equal(again.status, 200);
+  assert.equal(again.data.token, undefined);
+  assert.equal(resetMails() - mailsBefore, 1);
+
+  // the link already sent keeps working
+  const link = clicks.find((r) => r.data.token).data.token;
+  const { sha256 } = await import('../src/lib/auth.js');
+  assert.ok(await t.db.one("SELECT 1 FROM user_tokens WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()", [sha256(link)]));
+
+  // after the interval a new e-mail can be asked for
+  await t.db.query("UPDATE user_tokens SET created_at = now() - interval '2 minutes' WHERE type = 'PASSWORD_RESET'");
+  const later = await forgot('boss@test.dev');
+  assert.ok(later.data.token);
+  assert.notEqual(later.data.token, link);
+  assert.equal(resetMails() - mailsBefore, 2);
+
+  // an unknown address gets the same answer and no e-mail
+  const unknown = await forgot('nobody@test.dev');
+  assert.deepEqual(unknown.data, { ok: true });
+  assert.equal(mailsTo('nobody@test.dev').length, 0);
+});

@@ -114,6 +114,8 @@ table.table { width: 100%; border-collapse: collapse; background: #fff; }
 .alert.warning { background: var(--warning-light); color: #e65100; }
 .alert.success { background: #e8f5e9; color: #1b5e20; }
 .spinner { width: 22px; height: 22px; border: 3px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; display: inline-block; }
+.spinner.btn-spinner { width: 14px; height: 14px; border-width: 2px; border-color: rgba(255,255,255,.45); border-top-color: #fff; }
+.btn.secondary .spinner.btn-spinner { border-color: var(--border); border-top-color: var(--primary); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .loading-block { padding: 40px; display: flex; justify-content: center; }
 .grid { display: grid; gap: 16px; }

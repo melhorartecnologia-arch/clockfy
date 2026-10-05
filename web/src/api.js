@@ -66,19 +66,35 @@ export const api = {
 // Convenience wrappers for the most used resources ---------------------------------
 export const ws = (id) => `/workspaces/${id}`;
 
+// Reads a whole list, page by page. A single page used to hide whatever came after it in alphabetical order (e.g. tags
+// imported from Clockify past the 500th). Passing `page` asks for that page only.
+const PAGE_SIZE = 1000;
+async function listAll(path, params = {}) {
+  if (params.page !== undefined) return api.get(path, { 'page-size': PAGE_SIZE, ...params });
+  const all = [];
+  const seen = new Set();
+  for (let page = 1; page <= 100; page++) {
+    const items = await api.get(path, { ...params, page, 'page-size': PAGE_SIZE });
+    if (!Array.isArray(items)) return items;
+    for (const it of items) if (!seen.has(it.id)) { seen.add(it.id); all.push(it); }
+    if (items.length < PAGE_SIZE) break;
+  }
+  return all;
+}
+
 export const endpoints = {
   me: () => api.get('/user'),
   login: (email, password) => api.post('/auth/login', { email, password }),
   register: (data) => api.post('/auth/register', data),
   workspaces: () => api.get('/workspaces'),
   workspace: (id) => api.get(ws(id)),
-  projects: (id, params) => api.get(`${ws(id)}/projects`, { 'page-size': 500, ...params }),
+  projects: (id, params) => listAll(`${ws(id)}/projects`, params),
   project: (id, pid, params) => api.get(`${ws(id)}/projects/${pid}`, params),
-  tasks: (id, pid, params) => api.get(`${ws(id)}/projects/${pid}/tasks`, { 'page-size': 500, ...params }),
-  clients: (id, params) => api.get(`${ws(id)}/clients`, { 'page-size': 500, ...params }),
-  tags: (id, params) => api.get(`${ws(id)}/tags`, { 'page-size': 500, ...params }),
-  users: (id, params) => api.get(`${ws(id)}/users`, { 'page-size': 500, ...params }),
-  groups: (id, params) => api.get(`${ws(id)}/user-groups`, { 'page-size': 500, ...params }),
+  tasks: (id, pid, params) => listAll(`${ws(id)}/projects/${pid}/tasks`, params),
+  clients: (id, params) => listAll(`${ws(id)}/clients`, params),
+  tags: (id, params) => listAll(`${ws(id)}/tags`, params),
+  users: (id, params) => listAll(`${ws(id)}/users`, params),
+  groups: (id, params) => listAll(`${ws(id)}/user-groups`, params),
   customFields: (id, params) => api.get(`${ws(id)}/custom-fields`, params),
   timeEntries: (id, userId, params) => api.get(`${ws(id)}/user/${userId}/time-entries`, { hydrated: true, 'page-size': 200, ...params }),
   runningEntry: (id, userId) => api.get(`${ws(id)}/user/${userId}/time-entries/running`),
