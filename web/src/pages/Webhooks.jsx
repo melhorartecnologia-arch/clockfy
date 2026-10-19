@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useStore } from '../store.jsx';
 import { api, endpoints, ws } from '../api.js';
-import { MultiPicker, useProjects, useTags, useUsers, useTasks } from '../components/pickers.jsx';
+import { MultiPicker, useProjects, useAllTags, tagLabel, useUsers, useTasks } from '../components/pickers.jsx';
 import { Spinner, Alert, Empty, Modal, Confirm, Dropdown, Switch, Pagination } from '../components/ui.jsx';
 import { errorMessage } from '../lib/format.js';
 
@@ -69,7 +69,7 @@ export default function Webhooks() {
   const [busy, setBusy] = useState({});
   const projects = useProjects(wsId);
   const users = useUsers(wsId, { status: 'ALL' });
-  const tags = useTags(wsId);
+  const tags = useAllTags(wsId);
   const needTasks = list.some((w) => w.triggerSourceType === 'TASK_ID');
   const tasks = useAllTasks(wsId, projects, needTasks);
 
@@ -245,7 +245,7 @@ function WebhookModal({ webhook, projects, users, tags, onClose, onSaved }) {
         <div className="field">
           {f.triggerSourceType === 'PROJECT_ID' && <><label>Projetos</label><MultiPicker options={projects} value={f.triggerSource} onChange={(v) => set('triggerSource', v)} label="Selecionar projetos…" getLabel={(p) => (p.clientName ? `${p.name} – ${p.clientName}` : p.name)} /></>}
           {f.triggerSourceType === 'USER_ID' && <><label>Usuários</label><MultiPicker options={users} value={f.triggerSource} onChange={(v) => set('triggerSource', v)} label="Selecionar usuários…" /></>}
-          {f.triggerSourceType === 'TAG_ID' && <><label>Etiquetas</label><MultiPicker options={tags} value={f.triggerSource} onChange={(v) => set('triggerSource', v)} label="Selecionar etiquetas…" /></>}
+          {f.triggerSourceType === 'TAG_ID' && <><label>Etiquetas</label><MultiPicker options={tags} value={f.triggerSource} onChange={(v) => set('triggerSource', v)} label="Selecionar etiquetas…" getLabel={tagLabel} /></>}
           {f.triggerSourceType === 'TASK_ID' && (
             <>
               <label>Tarefas</label>

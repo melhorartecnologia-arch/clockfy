@@ -5,7 +5,7 @@ import { badRequest, forbidden, notFound } from '../../lib/errors.js';
 import { events } from '../../lib/events.js';
 import { audit } from '../../lib/audit.js';
 import { parseDate } from '../../lib/dates.js';
-import { loadEntry, entryDto, entriesDto, createEntry, updateEntry, deleteEntry, stopRunning, listEntries, canManageEntriesOf, assertCanEdit } from './service.js';
+import { loadEntry, entryDto, entriesDto, createEntry, updateEntry, deleteEntry, stopRunning, listEntries, canManageEntriesOf, assertCanEdit, activeTagIdsOf } from './service.js';
 import { visibleUserIds } from '../../middleware/workspace.js';
 import { resolveRates } from '../../lib/rates.js';
 import { isoToSeconds } from '../../lib/duration.js';
@@ -209,11 +209,11 @@ userRouter.post('/:id/duplicate', async (req, res) => {
   const e = await loadEntry(req.workspace.id, req.params.id);
   if (e.user_id !== uid) throw badRequest('Time entry does not belong to this user', 400);
   if (!(await canManageEntriesOf(req.ctx, uid, e.project_id))) throw forbidden();
-  const tags = await rows('SELECT tag_id FROM time_entry_tags WHERE time_entry_id = $1', [e.id]);
+  const tagIds = await activeTagIdsOf(e.id); // a copy is a new use: inactive tags are left out
   const cfs = await rows("SELECT custom_field_id, value FROM custom_field_values WHERE entity_type = 'TIMEENTRY' AND entity_id = $1", [e.id]);
   const copy = await createEntry(req.ctx, uid, {
     start: e.start_time, end: e.end_time, description: e.description, projectId: e.project_id, taskId: e.task_id, billable: e.billable, type: e.type,
-    tagIds: tags.map((t) => t.tag_id), customFields: cfs.map((c) => ({ customFieldId: c.custom_field_id, value: c.value })),
+    tagIds, customFields: cfs.map((c) => ({ customFieldId: c.custom_field_id, value: c.value })),
   });
   await respondEntry(req, res, copy, 201);
 });
@@ -231,11 +231,11 @@ userRouter.post('/:id/continue', async (req, res) => {
   const uid = req.params.userId;
   const e = await loadEntry(req.workspace.id, req.params.id);
   if (e.user_id !== uid) throw badRequest('Time entry does not belong to this user', 400);
-  const tags = await rows('SELECT tag_id FROM time_entry_tags WHERE time_entry_id = $1', [e.id]);
+  const tagIds = await activeTagIdsOf(e.id); // a copy is a new use: inactive tags are left out
   const cfs = await rows("SELECT custom_field_id, value FROM custom_field_values WHERE entity_type = 'TIMEENTRY' AND entity_id = $1", [e.id]);
   const copy = await createEntry(req.ctx, uid, {
     start: new Date().toISOString(), end: null, description: e.description, projectId: e.project_id, taskId: e.task_id, billable: e.billable, type: e.type,
-    tagIds: tags.map((t) => t.tag_id), customFields: cfs.map((c) => ({ customFieldId: c.custom_field_id, value: c.value })),
+    tagIds, customFields: cfs.map((c) => ({ customFieldId: c.custom_field_id, value: c.value })),
   });
   await respondEntry(req, res, copy, 201);
 });

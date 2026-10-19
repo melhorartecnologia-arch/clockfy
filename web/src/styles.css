@@ -273,3 +273,10 @@ table.table { width: 100%; border-collapse: collapse; background: #fff; }
 
 /* Cards laid out side by side in a grid must not inherit the stacked-card spacing */
 .grid > .card + .card { margin-top: 0; }
+
+/* Etiquetas: status ativa / inativa */
+.chip.inactive { background: transparent; border: 1px dashed var(--border-strong); color: var(--text-muted); }
+.tags-table th.pick, .tags-table td.pick { width: 36px; padding-right: 0; }
+.tags-table td.pick input, .tags-table th.pick input { width: auto; min-height: auto; }
+.tags-table tr.inactive-row td { background: #fafafa; }
+.bulk-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; background: var(--primary-light); border-bottom: 1px solid var(--border); }

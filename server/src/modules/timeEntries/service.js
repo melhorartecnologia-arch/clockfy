@@ -80,6 +80,18 @@ export async function assertCanEdit(ctx, entry) {
 }
 
 // Validates and normalizes an input payload into DB columns.
+export function inactiveTagsMessage(tags) {
+  const names = tags.map((t) => `“${t.name}”`).join(', ');
+  return tags.length === 1
+    ? `A etiqueta ${names} está inativa e não pode ser usada em novos registros. Escolha uma etiqueta ativa.`
+    : `As etiquetas ${names} estão inativas e não podem ser usadas em novos registros. Escolha etiquetas ativas.`;
+}
+
+// Tags of an entry that may be copied to a new one (continue, duplicate): inactive tags stay behind
+export async function activeTagIdsOf(entryId) {
+  return (await rows('SELECT tt.tag_id FROM time_entry_tags tt JOIN tags tg ON tg.id = tt.tag_id WHERE tt.time_entry_id = $1 AND NOT tg.archived', [entryId])).map((r) => r.tag_id);
+}
+
 export async function normalizeInput(ctx, userId, input, { existing } = {}) {
   const ws = ctx.workspace; const s = ctx.settings;
   const member = await one('SELECT status FROM workspace_members WHERE workspace_id = $1 AND user_id = $2', [ws.id, userId]);
@@ -123,9 +135,16 @@ export async function normalizeInput(ctx, userId, input, { existing } = {}) {
   if (input.tagIds !== undefined) {
     const ids = [...new Set((input.tagIds || []).filter(Boolean))];
     if (ids.length) {
-      const found = await rows('SELECT id, archived FROM tags WHERE workspace_id = $1 AND id = ANY($2)', [ws.id, ids]);
+      const found = await rows('SELECT id, name, archived FROM tags WHERE workspace_id = $1 AND id = ANY($2)', [ws.id, ids]);
       if (found.length !== ids.length) throw badRequest('One or more tags do not exist', 400);
-      if (found.some((t) => t.archived) && !ctx.isAdmin) throw badRequest('Cannot use archived tags', 400);
+      // Inactive (archived) tags are never added to a record – not even by administrators. A record that already carries
+      // one keeps it, so old records stay editable, reportable and approvable.
+      const inactive = found.filter((t) => t.archived);
+      if (inactive.length) {
+        const kept = existing ? new Set((await rows('SELECT tag_id FROM time_entry_tags WHERE time_entry_id = $1', [existing.id])).map((r) => r.tag_id)) : new Set();
+        const added = inactive.filter((t) => !kept.has(t.id));
+        if (added.length) throw badRequest(inactiveTagsMessage(added), 400);
+      }
     }
     out.tagIds = ids;
   }

@@ -46,6 +46,20 @@ function useTagList(workspaceId) {
   return [state.list, state.loading, setList];
 }
 export function useTags(workspaceId) { return useTagList(workspaceId)[0]; }
+// Active and inactive tags (filters of reports and webhooks: inactive tags still have records), active ones first
+export function useAllTags(workspaceId) {
+  const [list, setList] = useState([]);
+  useEffect(() => {
+    if (!workspaceId) return undefined;
+    let alive = true;
+    cached(`${workspaceId}:tags:all`, () => endpoints.tags(workspaceId))
+      .then((l) => alive && setList([...l].sort((a, b) => (a.archived - b.archived) || collator.compare(a.name, b.name))))
+      .catch(() => alive && setList([]));
+    return () => { alive = false; };
+  }, [workspaceId]);
+  return list;
+}
+export const tagLabel = (t) => (t.archived ? `${t.name} (inativa)` : t.name);
 
 // Search ignores case and accents ("manutencao" finds "Manutenção")
 const norm = (s) => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -198,13 +212,13 @@ export function TagPicker({ tagIds = [], onChange, allowCreate = true, label = '
   const option = (t) => (
     <div key={t.id} className="opt" onClick={() => toggle(t.id)}>
       <span className={`check ${tagIds.includes(t.id) ? 'on' : ''}`}>{tagIds.includes(t.id) ? '✓' : ''}</span>
-      <span className="truncate">{t.name}</span>{t.archived && <span className="light small">(arquivada)</span>}
+      <span className="truncate">{t.name}</span>{t.archived && <span className="light small">(inativa)</span>}
     </div>
   );
   return (
     <div className="picker" ref={ref}>
       <button type="button" className={`pick-btn ${selected.length ? '' : 'placeholder'}`} onClick={toggleOpen} title={selected.map((t) => t.name).join(', ')}>
-        {selected.length ? <span className="tag-list">{selected.slice(0, 3).map((t) => <span key={t.id} className="chip">{t.name}</span>)}{selected.length > 3 && <span className="chip">+{selected.length - 3}</span>}</span> : <>🏷 {label}</>}
+        {selected.length ? <span className="tag-list">{selected.slice(0, 3).map((t) => <span key={t.id} className={`chip ${t.archived ? 'inactive' : ''}`} title={t.archived ? 'Etiqueta inativa' : undefined}>{t.name}</span>)}{selected.length > 3 && <span className="chip">+{selected.length - 3}</span>}</span> : <>🏷 {label}</>}
       </button>
       {open && (
         <div className="panel">

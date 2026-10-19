@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '../store.jsx';
 import { api, endpoints, ws } from '../api.js';
-import { MultiPicker, useProjects, useTags, useUsers, useClients } from '../components/pickers.jsx';
+import { MultiPicker, useProjects, useAllTags, tagLabel, useUsers, useClients } from '../components/pickers.jsx';
 import { Spinner, Empty, Alert, Modal, Confirm, Dropdown, Tabs, Switch, DateRangePicker, Pagination } from '../components/ui.jsx';
 import EntryEditor from '../components/EntryEditor.jsx';
 import { useAsync, useLocalState, useDebounce } from '../lib/hooks.js';
@@ -48,7 +48,7 @@ function useReportFilter() {
   const clients = useClients(wsId);
   const projects = useProjects(wsId);
   const archivedProjects = useProjects(wsId, { archived: true });
-  const tags = useTags(wsId);
+  const tags = useAllTags(wsId); // inactive tags too: their records are still reported
   const tasks = useTasksOf(wsId, f.projects.ids);
   const { data: groups } = useAsync(() => endpoints.groups(wsId), [wsId], { initial: [] });
   const { data: customFields } = useAsync(() => endpoints.customFields(wsId).then((r) => (Array.isArray(r) ? r : r?.customFields || []).filter((c) => c.entityType !== 'USER' && c.status !== 'INACTIVE')), [wsId], { initial: [] });
@@ -161,7 +161,7 @@ function FilterBar({ ctx, weekly = false }) {
         <ContainsPicker label="Clientes" value={f.clients} onChange={(v) => patch({ clients: v })} options={options.clients} width={150} />
         <ContainsPicker label="Projetos" value={f.projects} onChange={(v) => patch({ projects: v, tasks: EMPTY_CONTAINS })} options={options.projects} getLabel={(p) => `${p.name}${p.clientName ? ` – ${p.clientName}` : ''}${p.archived ? ' (arquivado)' : ''}`} width={180} />
         <ContainsPicker label={f.projects.ids.length ? 'Tarefas' : 'Tarefas (escolha projetos)'} value={f.tasks} onChange={(v) => patch({ tasks: v })} options={options.tasks} width={160} disabled={!f.projects.ids.length} />
-        <ContainsPicker label="Etiquetas" value={f.tags} onChange={(v) => patch({ tags: v })} options={options.tags} only width={150} />
+        <ContainsPicker label="Etiquetas" value={f.tags} onChange={(v) => patch({ tags: v })} options={options.tags} getLabel={tagLabel} only width={150} />
         <select value={f.billable} onChange={(e) => patch({ billable: e.target.value })} title="Faturável"><option value="ALL">Faturável: todos</option><option value="YES">Faturável</option><option value="NO">Não faturável</option></select>
         <span className="fgroup">
           <input type="text" className="desc" placeholder="Descrição contém…" value={f.description} disabled={f.withoutDescription} onChange={(e) => patch({ description: e.target.value })} style={{ borderRadius: 'var(--radius) 0 0 var(--radius)' }} />

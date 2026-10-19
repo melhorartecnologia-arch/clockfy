@@ -206,7 +206,7 @@ function EntryRow({ e, group, sub, now, timeZone, hour12, isAdmin, onEdit, onCon
           : <input value={desc} placeholder="(sem descrição)" disabled={locked} onChange={(ev) => setDesc(ev.target.value)} onBlur={() => desc !== e.description && onInline(e, { description: desc })} onKeyDown={(ev) => ev.key === 'Enter' && ev.target.blur()} />}
       </div>
       <span onClick={() => !group && !locked && onEdit(e)} style={{ cursor: 'pointer' }}><ProjectLabel project={e.project} task={e.task} /></span>
-      {e.tags && e.tags.length > 0 && <span className="tag-list">{e.tags.map((t) => <span key={t.id} className="chip">{t.name}</span>)}</span>}
+      {e.tags && e.tags.length > 0 && <span className="tag-list">{e.tags.map((t) => <span key={t.id} className={`chip ${t.archived ? 'inactive' : ''}`} title={t.archived ? 'Etiqueta inativa' : undefined}>{t.name}</span>)}</span>}
       {e.type === 'BREAK' && <span className="badge">Pausa</span>}
       {e.type === 'TIME_OFF' && <span className="badge warning">Folga</span>}
       {e.type === 'HOLIDAY' && <span className="badge warning">Feriado</span>}

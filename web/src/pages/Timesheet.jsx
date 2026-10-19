@@ -121,14 +121,18 @@ export default function Timesheet() {
       const prev = await endpoints.timeEntries(wsId, viewUser, { start: localToIso(addDays(weekOf, -7), '00:00', timeZone), end: startIso, hydrated: false, 'page-size': 2000, 'in-progress': false });
       const list = prev.filter((e) => e.timeInterval.end && e.type !== 'BREAK');
       if (!list.length) { toast('A semana anterior não possui registros'); return; }
-      let n = 0;
+      // inactive tags are not copied to the new week (they cannot be used in new records)
+      const active = new Set((await endpoints.tags(wsId, { archived: false })).map((t) => t.id));
+      let n = 0; let dropped = 0;
       for (const e of list) {
+        const tagIds = (e.tagIds || []).filter((id) => active.has(id));
+        if (tagIds.length < (e.tagIds || []).length) dropped++;
         const s = new Date(new Date(e.timeInterval.start).getTime() + 7 * 86400000).toISOString();
         const en = new Date(new Date(e.timeInterval.end).getTime() + 7 * 86400000).toISOString();
-        await createEntry({ start: s, end: en, description: e.description, projectId: e.projectId, taskId: e.taskId, tagIds: e.tagIds, billable: e.billable, type: e.type });
+        await createEntry({ start: s, end: en, description: e.description, projectId: e.projectId, taskId: e.taskId, tagIds, billable: e.billable, type: e.type });
         n++;
       }
-      toast(`${n} registro(s) copiado(s)`, 'success');
+      toast(`${n} registro(s) copiado(s)${dropped ? `; etiquetas inativas não foram copiadas em ${dropped}` : ''}`, 'success');
       load();
     } catch (err) { toast(errorMessage(err), 'error'); load(); } finally { setBusy(false); }
   }
